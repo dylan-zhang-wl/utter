@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+target/
+*.egg-info/
+.env
+~/LiveScribe/
+backend/models/
