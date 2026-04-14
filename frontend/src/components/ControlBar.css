@@ -1,0 +1,54 @@
+.control-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #ffffff;
+  border-top: 1px solid #e8e8e8;
+  font-size: 13px;
+}
+
+.btn-record {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #4a6fa5;
+  color: white;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-record:hover { background: #3a5f95; }
+.btn-record.recording { background: #e74c3c; }
+.btn-record.recording:hover { background: #c0392b; }
+.btn-record:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.control-group label {
+  color: #666;
+  font-size: 12px;
+}
+
+.control-group select {
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+  background: white;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: auto;
+}
+
+.status-dot.connected { background: #2ecc71; }
+.status-dot.disconnected { background: #e74c3c; }
