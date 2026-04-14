@@ -1,14 +1,16 @@
 import asyncio
 from abc import ABC, abstractmethod
 
-try:
-    import googletrans
-    _GOOGLETRANS_AVAILABLE = True
-except (ImportError, AttributeError):
-    googletrans = None
-    _GOOGLETRANS_AVAILABLE = False
-
+from deep_translator import GoogleTranslator as _DeepGoogleTranslator
 import openai
+
+
+# deep-translator uses "zh-CN" rather than "zh-cn"
+_LANG_MAP = {"zh-cn": "zh-CN", "zh": "zh-CN"}
+
+
+def _normalize_lang(lang: str) -> str:
+    return _LANG_MAP.get(lang, lang)
 
 
 class BaseTranslator(ABC):
@@ -18,24 +20,13 @@ class BaseTranslator(ABC):
 
 
 class GoogleTranslator(BaseTranslator):
-    def __init__(self):
-        if _GOOGLETRANS_AVAILABLE:
-            self._translator = googletrans.Translator()
-        else:
-            self._translator = None
-
     async def translate(self, text: str, target_lang: str = "zh-cn") -> str:
         if not text.strip():
             return ""
-        if not _GOOGLETRANS_AVAILABLE:
-            raise RuntimeError(
-                "googletrans is not available. Install a compatible version: "
-                "pip install googletrans==4.0.0rc1"
-            )
-        result = await asyncio.to_thread(
-            self._translator.translate, text, dest=target_lang
+        target = _normalize_lang(target_lang)
+        return await asyncio.to_thread(
+            _DeepGoogleTranslator(source="auto", target=target).translate, text
         )
-        return result.text
 
 
 class OpenAITranslator(BaseTranslator):

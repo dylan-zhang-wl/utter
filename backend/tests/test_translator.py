@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 from backend.translator import GoogleTranslator, OpenAITranslator, get_translator
 
 
@@ -15,13 +15,10 @@ def test_get_translator_openai():
 
 @pytest.mark.asyncio
 async def test_google_translate():
-    mock_googletrans = MagicMock()
     mock_instance = MagicMock()
-    mock_instance.translate.return_value = MagicMock(text="你好世界")
-    mock_googletrans.Translator.return_value = mock_instance
+    mock_instance.translate.return_value = "你好世界"
 
-    with patch("backend.translator.googletrans", mock_googletrans), \
-         patch("backend.translator._GOOGLETRANS_AVAILABLE", True):
+    with patch("backend.translator._DeepGoogleTranslator", return_value=mock_instance):
         t = GoogleTranslator()
         result = await t.translate("Hello world")
         assert result == "你好世界"
