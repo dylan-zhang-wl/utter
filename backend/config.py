@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 
 class AppConfig(BaseModel):
-    whisper_model: str = "base"
+    whisper_model: str = "small"
     audio_source: str = "microphone"  # "microphone" or "system"
     translation_engine: str = "google"  # "google" or "openai"
     display_mode: str = "bilingual"  # "english", "bilingual", "chinese"

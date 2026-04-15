@@ -8,13 +8,19 @@ export function useWebSocket() {
   const { setConnected, setRecording, addEntry } = useAppStore();
 
   useEffect(() => {
+    let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
     const connect = () => {
+      if (cancelled) return;
       const ws = new WebSocket(WS_URL);
 
       ws.onopen = () => setConnected(true);
       ws.onclose = () => {
         setConnected(false);
-        setTimeout(connect, 3000); // auto-reconnect
+        if (!cancelled) {
+          reconnectTimer = setTimeout(connect, 3000);
+        }
       };
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -36,7 +42,11 @@ export function useWebSocket() {
     };
 
     connect();
-    return () => wsRef.current?.close();
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      wsRef.current?.close();
+    };
   }, []);
 
   const send = useCallback((action: string, extra?: Record<string, unknown>) => {

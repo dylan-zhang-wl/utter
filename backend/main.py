@@ -18,6 +18,7 @@ audio_manager = AudioCaptureManager()
 transcriber: Transcriber | None = None
 current_session: Session | None = None
 connected_clients: set[WebSocket] = set()
+_process_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
@@ -98,7 +99,7 @@ async def broadcast(message: dict):
 # Audio buffer for accumulating chunks before transcription
 _audio_buffer: list[np.ndarray] = []
 _buffer_lock = asyncio.Lock()
-BUFFER_DURATION_SEC = 3  # transcribe every N seconds
+BUFFER_DURATION_SEC = 8  # transcribe every N seconds
 
 
 async def process_audio_loop():
@@ -163,7 +164,9 @@ async def websocket_endpoint(ws: WebSocket):
                 audio_manager.switch_source(config.audio_source)
                 audio_manager.start(device_index=data.get("device_index"))
 
-                asyncio.create_task(process_audio_loop())
+                global _process_task
+                if _process_task is None or _process_task.done():
+                    _process_task = asyncio.create_task(process_audio_loop())
                 await ws.send_json({"type": "status", "status": "recording"})
 
             elif action == "stop":
