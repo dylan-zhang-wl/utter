@@ -22,10 +22,15 @@ Read before Task 1:
 
 ```bash
 uv venv ~/.venvs/utter
-~/.venvs/utter/bin/python -m pip --version   # sanity
 ```
 
 Per global rules the venv lives outside the repo (this repo is inside iCloud). Never create `.venv/` in the project.
+
+**Two gaps found during preflight on 2026-08-10 — fix both before Task 1:**
+
+1. **The repo has no dependency recipe at all.** No `requirements.txt`, no `pyproject.toml`. v1's deps were only ever in an ad-hoc venv that no longer exists. Write `requirements.txt` from the actual import set (`fastapi`, `uvicorn`, `pydantic`, `numpy`, `sounddevice`, `soundfile`, `faster-whisper`, `deep-translator`, `openai`, `keyring`, `huggingface-hub`, `onnxruntime`, `mlx-whisper`, plus `pytest`/`pytest-asyncio`). Global rule: the recipe lives in the repo, the environment does not.
+
+2. **`docs/benchmarks/bench60.wav` does not exist** — Task 12 referenced it, but the benchmark script's own docstring shows it was generated ad hoc from an unnamed source and never committed (correctly: it's a binary, and 铁律 3 keeps audio out of this project). Task 12 is amended below to generate its own fixture.
 
 **Existing code:** v1's `backend/` modules stay in place during P1. `transcriber.py` is superseded by the provider layer but is not deleted until P3 rewires `main.py`. Do not edit `main.py` in P1.
 
@@ -248,15 +253,26 @@ Expected failure: `ModuleNotFoundError: No module named 'backend.cli'`
 
 **Implement** — `backend/cli.py` with those four subcommands. File input rather than mic keeps it testable; mic comes in P2.
 
-**Then run the real verification** (manual, not a unit test):
+**Then run the real verification** (manual, not a unit test).
+
+First generate the fixture — `docs/benchmarks/make-fixture.sh`, committed as a *script*, never as a wav:
 
 ```bash
-~/.venvs/utter/bin/python -m backend.cli transcribe docs/benchmarks/bench60.wav --mode listen --timing
+docs/benchmarks/make-fixture.sh   # macOS `say` + ffmpeg -> 16kHz mono wav in scratch
+```
+
+Using synthesised speech is deliberate and its limits must be stated in the recorded result:
+
+- **Valid for latency.** With `temperature=0.0` there is no fallback retry, and Whisper pads every chunk to 30 s regardless of content — so per-chunk cost is near content-independent. This is exactly what §3 measured and what Task 12 re-checks.
+- **Invalid for accuracy.** Synthetic speech has no accent, no disfluency, no room noise. **Do not draw any WER conclusion from it.** Accuracy comparison (large-v3-turbo vs SenseVoice vs Parakeet, Chinese-English code-switching) needs the author's own recording and belongs to P2b — it is already listed as open item 3 in design §9.
+
+```bash
+~/.venvs/utter/bin/python -m backend.cli transcribe <fixture>.wav --mode listen --timing
 ```
 
 **Acceptance:** per-utterance transcription time must land near the design §3 figures (~1.0–1.2 s for 2–15 s utterances on this M2). If it is materially slower, stop and diagnose before P2 — something in the wiring is wrong, because the raw model was measured at these numbers.
 
-Record the result in `docs/benchmarks/` as a second data point alongside the raw-model numbers.
+Record the result in `docs/benchmarks/` as a second data point alongside the raw-model numbers, **with the synthetic-audio caveat written into the file** so a later reader cannot mistake it for an accuracy benchmark.
 
 **Commit:** `feat(cli): transcribe/models/doctor commands and pipeline latency check`
 
@@ -267,7 +283,10 @@ Record the result in `docs/benchmarks/` as a second data point alongside the raw
 - `utter doctor` correctly reports hardware and provider availability on this M2.
 - `utter transcribe` produces sensible utterances from the benchmark file in both modes.
 - Measured per-utterance latency matches design §3.
-- No `torch` in the dependency tree — verify with `~/.venvs/utter/bin/pip list | grep -i torch` returning nothing.
-- No concrete provider imported outside `backend/providers/`.
+- No `torch` in the dependency tree, and no concrete provider imported outside `backend/providers/` — **both enforced by `backend/tests/test_dependencies.py`, not by eyeballing.**
 
-Then P2: dictation mode — global hotkey, push-to-talk segmentation, cursor injection.
+> The done-criteria originally said to check torch with `~/.venvs/utter/bin/pip list | grep -i torch`. **That command false-passes**: uv venvs ship without `pip`, so the pipeline greps empty output and prints nothing whether or not torch is installed. It fooled this exact plan's execution on 2026-08-10 for one round. By hand, use `uv pip list --python ~/.venvs/utter/bin/python`.
+
+Then **P2a**: minimal usable dictation — global hotkey, push-to-talk segmentation, scratchpad mode, polish off by default. Full spec is design **§4.1** (added 2026-08-10); the roadmap split is design §8.
+
+Note for whoever picks up P2a: §4.1 carries six new binding rules that were folded into `CLAUDE.md` as 铁律 8–13. The one most likely to be violated by well-meaning code is **铁律 9 — injected text is never rewritten.** Any design that injects a draft and later corrects it in place is wrong, no matter how good it looks in a demo.
