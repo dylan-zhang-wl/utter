@@ -1,0 +1,49 @@
+# Utter runtime dependencies.
+#
+# The environment itself lives OUTSIDE this repo (global rule: this repo is in
+# iCloud, and ten thousand small files would drown both git and iCloud sync):
+#
+#     uv venv ~/.venvs/utter
+#     uv pip install --python ~/.venvs/utter/bin/python \
+#         --overrides requirements-overrides.txt -r requirements-dev.txt
+#
+# The --overrides flag is NOT optional: mlx-whisper falsely declares torch and
+# would drag in 476M without it. See requirements-overrides.txt for the evidence.
+#
+# 铁律 5 is enforced by backend/tests/test_dependencies.py, not by eyeballing.
+# Note that `~/.venvs/utter/bin/pip list | grep torch` FALSE-PASSES here — uv
+# venvs ship without pip, so that pipeline greps empty output and prints nothing.
+# Use `uv pip list --python ~/.venvs/utter/bin/python` if checking by hand.
+
+# --- audio -------------------------------------------------------------------
+numpy>=1.26
+sounddevice>=0.4.6          # mic capture (PortAudio)
+soundfile>=0.12             # wav I/O for the CLI and fixtures
+
+# --- speech to text ----------------------------------------------------------
+# MLX is Apple-Silicon-only (Metal GPU). The marker keeps `pip install -r` from
+# exploding on Intel Macs and Windows — 铁律 6 exists because the author owns
+# such a machine.
+mlx-whisper>=0.4.3 ; sys_platform == "darwin" and platform_machine == "arm64"
+faster-whisper>=1.0         # CTranslate2 — CPU and CUDA. No torch.
+
+# --- voice activity detection ------------------------------------------------
+# silero VAD as ONNX weights. Never `pip install silero-vad`: that one drags in
+# 328M of torch for a 2M model (铁律 5).
+onnxruntime>=1.17
+
+# --- models ------------------------------------------------------------------
+huggingface-hub>=0.23       # tier downloader; reuses ~/.cache/huggingface
+
+# --- secrets -----------------------------------------------------------------
+keyring>=25.0               # macOS Keychain. 铁律 4: keys never touch disk in plain text
+
+# --- LLM (translation + polish) ----------------------------------------------
+httpx>=0.27                 # Ollama's HTTP API
+openai>=1.30                # covers every OpenAI-compatible endpoint (DeepSeek, Groq, ...)
+deep-translator>=1.11       # fallback translation only — no SLA, rate-limited (design §5.2)
+
+# --- backend service (v1, still standing until P3 rewires main.py) -----------
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6

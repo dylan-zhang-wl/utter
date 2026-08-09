@@ -1,0 +1,22 @@
+# Dependency overrides — the machinery that enforces 铁律 5 (no torch).
+#
+# Pass to every install:
+#     uv pip install --python ~/.venvs/utter/bin/python \
+#         --overrides requirements-overrides.txt -r requirements-dev.txt
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# mlx-whisper 0.4.3 declares `torch` in its metadata (Requires-Dist: torch),
+# which drags in 476M. Verified on 2026-08-10 that this declaration is wrong for
+# our use:
+#
+#   * every torch reference in the package lives in mlx_whisper/torch_whisper.py
+#   * nothing imports that module — it is the converter for turning original
+#     OpenAI PyTorch checkpoints into MLX format, not part of inference
+#   * with torch uninstalled, transcription runs normally and `torch` never even
+#     appears in sys.modules
+#
+# The marker below is never satisfiable, so the requirement resolves away.
+# Do not "fix" this by relaxing it; re-verify with the checks above instead, and
+# only if a future mlx-whisper genuinely moves torch onto the inference path.
+torch ; python_version < "0"
