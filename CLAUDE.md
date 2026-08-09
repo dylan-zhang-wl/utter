@@ -16,6 +16,7 @@
 | `docs/plans/2026-04-14-livescribe-v2-*.md` | **已作废**。存废清单见 v3 设计 §7 |
 | `docs/plans/2026-04-13-livescribe-*.md` | v1 历史，仅供考古 |
 | [docs/benchmarks/](docs/benchmarks/) | 实测数据，架构结论的依据 |
+| [docs/plans/2026-08-10-p1-build-log.md](docs/plans/2026-08-10-p1-build-log.md) | P1 施工日志：自主决定、被推翻的旧说法、待办 |
 
 **不要再提议"执行现成的 v2 计划"。** v2 的 partial 管线已被实测证伪。
 
@@ -40,11 +41,35 @@
 
 ## 环境
 
-- 开发机 Apple M2 / 16G。模型 `mlx-community/whisper-large-v3-turbo` 已在 `~/.cache/huggingface/`（1.5G），**不要重复下载**。
-- 依赖环境按全局规则建在仓库外：`uv venv ~/.venvs/utter`。**不要在项目内建 `.venv`**（本仓在 iCloud 同步区）。
+- 开发机 Apple M2 / 16G。模型 `mlx-community/whisper-large-v3-turbo` 已在 `~/.cache/huggingface/`（1.6G），**不要重复下载**。
+- 依赖环境按全局规则建在仓库外。**不要在项目内建 `.venv`**（本仓在 iCloud 同步区）：
+
+```bash
+uv venv ~/.venvs/utter
+uv pip install --python ~/.venvs/utter/bin/python \
+    --overrides requirements-overrides.txt -r requirements-dev.txt
+```
+
+> `--overrides` **不是可选的**。`mlx-whisper` 谎报依赖 torch，不加这个参数会拖进 476M
+> 并直接违反铁律 5。证据见 `requirements-overrides.txt`。
+
+- 查依赖用 `uv pip list --python ~/.venvs/utter/bin/python`。
+  **`~/.venvs/utter/bin/pip list` 会假通过**——uv venv 不装 pip，管道 grep 的是空输出。
 - 构建物（`target/`、`node_modules/`、`dist/`）随时可删，用完即清。
 
 ## 运行
+
+```bash
+# P1 的命令行（可用）
+~/.venvs/utter/bin/python -m backend.cli doctor
+~/.venvs/utter/bin/python -m backend.cli models list
+~/.venvs/utter/bin/python -m backend.cli transcribe FILE.wav --mode listen --timing
+
+# 测试。默认跳过联网与真模型；全跑加 -m ""
+~/.venvs/utter/bin/python -m pytest -q
+```
+
+v1 的图形界面（P3 前仍是旧管线）：
 
 ```bash
 # 后端（终端 A）
@@ -57,4 +82,11 @@ cd frontend && npm run tauri dev
 
 ## 状态
 
-当前在 `v3` 分支。**设计已定（含 2026-08-10 增补的 §4.1 听写规格），P1 施工中。** 无远端仓库（作者明示暂缓，勿反复劝）。路线见 v3 设计 §8。
+当前在 `v3` 分支。**P1 共享核心已完成并验收（2026-08-10）**：provider 抽象、硬件探测、
+档位 catalog、模型下载器、VAD、配置与钥匙串、五槽管线、CLI 全部就绪，295 个测试通过，
+每句转录中位 1.18s、占空比 29%。
+
+下一步 **P2a**：无界面的最小可用听写（热键、暂存模式、默认关润色）。规格见 v3 设计 §4.1，
+排期见 §8，遗留待办见 [P1 施工日志](docs/plans/2026-08-10-p1-build-log.md) §六。
+
+无远端仓库（作者明示暂缓，勿反复劝）。
