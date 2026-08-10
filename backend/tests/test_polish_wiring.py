@@ -94,3 +94,67 @@ def test_a_model_that_answers_instead_of_editing_is_rejected(wired):
 def test_an_unknown_provider_does_not_crash_dictation(wired):
     wired(FakeLlm())
     assert build_polish(AppConfig(polish_enabled=True, llm_provider="不存在")) is None
+
+
+# --- model resolution ----------------------------------------------------------
+
+
+class _Models:
+    def __init__(self, ids):
+        self._ids = ids
+
+    def list(self):
+        return [type("M", (), {"id": i})() for i in self._ids]
+
+
+class _Client:
+    def __init__(self, ids):
+        self.models = _Models(ids)
+
+
+def test_the_model_is_resolved_against_the_key_not_hardcoded(monkeypatch):
+    """gpt-4o-mini was this file's default until OpenAI's lineup had moved on
+    twice. A hardcoded id is a 404 waiting for a date."""
+    from backend.providers import openai_compat as oc
+
+    p = oc.OpenAICompatProvider()
+    monkeypatch.setattr(p, "_client", lambda: _Client(["gpt-5-nano", "gpt-4o-mini"]))
+    monkeypatch.setattr(p, "_key", lambda: "sk-test")
+
+    assert p.resolve_model() == "gpt-5-nano"
+
+
+def test_an_explicit_model_is_honoured_as_given(monkeypatch):
+    from backend.providers import openai_compat as oc
+
+    p = oc.OpenAICompatProvider(model="o9-turbo-imaginary")
+    monkeypatch.setattr(p, "_client", lambda: _Client(["gpt-5-nano"]))
+    assert p.resolve_model() == "o9-turbo-imaginary"
+
+
+def test_a_failed_listing_does_not_stop_polish(monkeypatch):
+    """铁律 8 again: not knowing the best model must not cost the words."""
+    from backend.providers import openai_compat as oc
+
+    p = oc.OpenAICompatProvider()
+
+    def boom():
+        raise oc.LlmError("network down")
+
+    monkeypatch.setattr(p, "available_models", boom)
+    assert p.resolve_model() == oc.DEFAULT_MODEL
+
+
+def test_non_chat_models_are_never_offered(monkeypatch):
+    """Asking an embedding model to punctuate gives a confusing error rather
+    than an obviously wrong answer."""
+    from backend.providers import openai_compat as oc
+
+    p = oc.OpenAICompatProvider()
+    monkeypatch.setattr(p, "_client", lambda: _Client([
+        "gpt-5-nano", "text-embedding-3-small", "whisper-1", "dall-e-3",
+        "tts-1", "omni-moderation-latest", "gpt-5-mini",
+    ]))
+    monkeypatch.setattr(p, "_key", lambda: "sk-test")
+
+    assert p.chat_models() == ["gpt-5-mini", "gpt-5-nano"]

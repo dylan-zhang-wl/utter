@@ -43,6 +43,12 @@ class AppConfig(BaseModel):
     # request per utterance, which the free quota covers.
     llm_provider: str = "gemini"
 
+    # Overrides the provider's own choice. None means "ask the key what exists
+    # and take the best" — a hardcoded id is how a working build starts
+    # returning 404 six months after it shipped, which is exactly what happened
+    # to gpt-4o-mini in this file. `utter polish --benchmark` fills this in.
+    llm_model: str | None = None
+
     # Vertex AI, for when there is Google Cloud credit but no API key. Not a
     # secret: a project id is an identifier, and the credential it is used with
     # lives in gcloud's own store, never here (铁律 4).

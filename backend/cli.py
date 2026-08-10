@@ -212,9 +212,14 @@ def _llm_providers(config=None):
         "VertexProvider": {
             "project": config.vertex_project,
             "location": config.vertex_location,
-            "model": config.vertex_model,
+            "model": config.llm_model or config.vertex_model,
         },
     }
+    if config.llm_model:
+        # An explicit id wins everywhere, so `utter polish --benchmark` has
+        # somewhere to put its answer.
+        kwargs["OpenAICompatProvider"] = {"model": config.llm_model}
+        kwargs["GeminiProvider"] = {"model": config.llm_model}
 
     found = []
     for module_name, class_name in (
@@ -368,6 +373,88 @@ def _build_stamp() -> str:
         return ""
 
 
+#: A sentence with the shape that matters: Chinese argument, embedded English
+#: terminology, filler, no punctuation at all. Benchmarking on "hello world"
+#: would rank models on a task we never ask them to do.
+_BENCHMARK_TEXT = (
+    "所以我这一节想讨论的其实是异化和归化这两个概念在数字人文的语境下会不会失效"
+    "呃因为韦努蒂当年谈的是印刷时代的翻译而我们现在面对的是机器翻译的输出"
+    "这个我觉得是需要重新界定的"
+)
+
+
+def _benchmark_models(provider, text: str, config, out) -> int:
+    """Time every reachable chat model on the real prompt, and rank them.
+
+    Written because guessing was wrong twice. Third-party lists of "the fastest
+    model" disagree with each other and go stale within weeks, and the id that
+    a given key can actually reach is not something a blog post knows. On the
+    Google side this exact exercise found a seven-fold difference between two
+    models whose output was character-identical.
+
+    Latency, not throughput. Polish is one short request per utterance sitting
+    directly between the author and their document, so time-to-last-token on
+    a realistic sentence is the only number that matters.
+    """
+    import time
+
+    from backend.providers.llm import apply_punctuation, polish_prompt
+
+    lister = getattr(provider, "chat_models", None)
+    if lister is None:
+        print(f"{provider.display_name} 不支持列出模型。", file=out)
+        return 1
+    try:
+        candidates = lister()
+    except Exception as exc:
+        print(f"列不出模型：{exc}", file=out)
+        return 1
+
+    if not candidates:
+        print("这个 key 一个可用的对话模型都看不到。", file=out)
+        return 1
+
+    print(f"{len(candidates)} 个可用对话模型，逐个跑同一句真实口述\n", file=out)
+    print(f"原文  {text}\n", file=out)
+
+    system = polish_prompt("light")
+    user = f"【需要处理的文字】\n{text}"
+    results = []
+    original = provider.model
+    for name in candidates:
+        provider.model = name
+        provider._resolved = True
+        started = time.perf_counter()
+        try:
+            reply = provider.complete(system, user)
+        except Exception as exc:
+            print(f"  {'—':>7}  {name:<28} {type(exc).__name__}", file=out)
+            continue
+        ms = (time.perf_counter() - started) * 1000
+        merged = apply_punctuation(text, reply.strip())
+        marks = sum(1 for c in merged if c in "，。？！；：、")
+        results.append((ms, name, marks, merged))
+        print(f"  {ms:5.0f}ms  {name:<28} {marks} 个标点", file=out)
+    provider.model = original
+
+    if not results:
+        print("\n没有一个模型跑通。", file=out)
+        return 1
+
+    results.sort()
+    print("\n最快的三个，看看标点质量：\n", file=out)
+    for ms, name, marks, merged in results[:3]:
+        print(f"  [{name}]  {ms:.0f}ms\n    {merged}\n", file=out)
+
+    best = results[0][1]
+    print(
+        f"最快：{best}\n"
+        f"设进去：在 ~/Utter/config.json 里加 \"llm_model\": \"{best}\"",
+        file=out,
+    )
+    return 0
+
+
 #: Which Keychain entry each provider reads, so `utter key` can name them
 #: rather than making the author find the string in the source.
 KEY_NAMES = {
@@ -449,10 +536,15 @@ def cmd_polish(args, out) -> int:
         print(f"{provider.display_name} 用不了：{reason}", file=out)
         return 1
 
-    text = args.text or sys.stdin.read()
+    text = args.text or (sys.stdin.read() if not sys.stdin.isatty() else "")
+    if not text.strip():
+        text = _BENCHMARK_TEXT if args.benchmark else ""
     if not text.strip():
         print("没有输入。用法：utter polish '要处理的文字'", file=out)
         return 1
+
+    if args.benchmark:
+        return _benchmark_models(provider, text.strip(), config, out)
 
     levels = [args.level] if args.level else ["light", "medium", "heavy"]
     print(f"模型  {getattr(provider, 'model', provider.display_name)}\n", file=out)
@@ -780,6 +872,11 @@ def build_parser() -> argparse.ArgumentParser:
                             help="one level; omit to compare all three")
     polish_cmd.add_argument("--provider", default=None, help="override config.llm_provider")
     polish_cmd.add_argument("--show-prompt", action="store_true")
+    polish_cmd.add_argument(
+        "--benchmark",
+        action="store_true",
+        help="time every model this key can reach, on a realistic sentence",
+    )
 
     keys = sub.add_parser("keys", help="find a hotkey nothing else has claimed")
     keys.add_argument("--seconds", type=float, default=60.0)
