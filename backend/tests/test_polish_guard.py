@@ -91,3 +91,71 @@ def test_safe_polish_accepts_a_clean_punctuation_pass():
     result, polished = safe_polish(_Model(LIGHT), RAW)
     assert result == LIGHT
     assert polished is True
+
+
+# --- filler removal, done by us rather than by the model -----------------------
+
+
+def test_a_leading_filler_takes_its_comma_with_it():
+    from backend.providers.llm import strip_fillers
+
+    assert strip_fillers("呃，因为韦努蒂谈的是印刷时代。") == "因为韦努蒂谈的是印刷时代。"
+
+
+def test_a_stammer_collapses_rather_than_vanishing():
+    """那个那个那个 was one word said three times, not three words."""
+    from backend.providers.llm import strip_fillers
+
+    assert strip_fillers("他还是说出了那个那个那个我是故意说的。") == (
+        "他还是说出了那个我是故意说的。"
+    )
+
+
+def test_english_fillers_go_too():
+    from backend.providers.llm import strip_fillers
+
+    assert strip_fillers("Um, I will uh lock in candidate two.") == (
+        "I will lock in candidate two."
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "这个额度还有多少？",          # 额 — an earlier draft would have left 「度」
+        "前额也疼。",                  # 额 again, at the other end of a word
+        "他呐喊了一声。",              # 呐
+        "也就是说，这个概念要重新界定。",  # 就是说 — a real discourse marker
+        "啊里巴巴和四十大盗。",         # 啊
+    ],
+)
+def test_words_that_merely_contain_a_filler_are_untouched(text):
+    """This runs as a blind substring replace, so every entry on the list has
+    to be a string that cannot appear inside an ordinary word. A stray 「呃」 is
+    a blemish; a mangled word is a lie."""
+    from backend.providers.llm import strip_fillers
+
+    assert strip_fillers(text) == text
+
+
+def test_light_leaves_filler_alone():
+    """By design, and the author should not have to guess: 「轻」 is punctuation
+    only. This is why their 嗯 and 呃 survived the first real test."""
+    result, polished = safe_polish(_Model("呃，我觉得是这样。"), "呃我觉得是这样", level="light")
+    assert result == "呃，我觉得是这样。"
+    assert polished is True
+
+
+def test_medium_removes_filler_without_asking_the_model_to():
+    """The model returns punctuation only; the deletion is ours. Its prompt no
+    longer contains the instruction that cost the author 「因为」."""
+    result, polished = safe_polish(_Model("呃，我觉得是这样。"), "呃我觉得是这样", level="medium")
+    assert result == "我觉得是这样。"
+    assert polished is True
+
+
+def test_the_model_is_never_told_to_delete_anything():
+    from backend.providers.llm import polish_prompt
+
+    for level in ("light", "medium", "heavy"):
+        assert "删除" not in polish_prompt(level), level

@@ -57,9 +57,24 @@ def test_light_is_the_most_conservative():
     assert "口水词" not in light, "light only punctuates; removing filler is medium"
 
 
-def test_levels_actually_differ():
-    prompts = {llm.polish_prompt(l) for l in ("light", "medium", "heavy")}
-    assert len(prompts) == 3
+def test_light_and_medium_ask_the_model_for_exactly_the_same_thing():
+    """They used to differ, and that difference is what cost the author 「因为」:
+    「medium」 told the model to delete filler and it deleted a causal
+    connective too. Deletion is now ours, done from a fixed list. The levels
+    differ in what *we* do afterwards, not in what the model is asked."""
+    assert llm.polish_prompt("light") == llm.polish_prompt("medium")
+
+
+def test_heavy_is_the_only_level_that_asks_for_more():
+    assert llm.polish_prompt("heavy") != llm.polish_prompt("light")
+    assert "分段" in llm.polish_prompt("heavy")
+
+
+def test_levels_actually_differ_in_behaviour():
+    kept, _ = llm.safe_polish(FakeLlm(reply="呃，我觉得是这样。"), "呃我觉得是这样", level="light")
+    dropped, _ = llm.safe_polish(FakeLlm(reply="呃，我觉得是这样。"), "呃我觉得是这样", level="medium")
+    assert kept == "呃，我觉得是这样。"
+    assert dropped == "我觉得是这样。"
 
 
 def test_unknown_level_falls_back_to_light():

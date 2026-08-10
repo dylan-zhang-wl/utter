@@ -127,17 +127,67 @@ _COMMON_RULES = (
     "只输出处理后的正文，不要解释、不要加引号、不要写前言。"
 )
 
+# The model is never asked to delete anything. Not at any level.
+#
+# It used to be. "medium" told it to remove 「嗯」「呃」「就是说」, and against a
+# real model that instruction also cost the author 「因为」 — a causal
+# connective, deleted from an academic argument, in an output that read
+# perfectly. Deletion and punctuation have completely different risk profiles:
+# punctuation genuinely needs a language model, while removing 「呃」 is a string
+# operation we can do exactly, verifiably, and with a list the author can read.
+#
+# So the model punctuates; `strip_fillers` below does the deleting. The only
+# thing that changes between levels is how much *we* then do.
 _LEVELS = {
     "light": "你是一个口述稿的标点整理工具。只做一件事：为下面的文字补上正确的标点与断句。",
-    "medium": (
-        "你是一个口述稿的清理工具。只做三件事：补标点与断句；"
-        "删除「嗯」「呃」「就是说」这类口水词；删除说话人自我重复的部分。"
-    ),
+    "medium": "你是一个口述稿的标点整理工具。只做一件事：为下面的文字补上正确的标点与断句。",
     "heavy": (
-        "你是一个口述稿的整理工具。只做四件事：补标点与断句；删除口水词；"
-        "删除自我重复；按语义分段。"
+        "你是一个口述稿的整理工具。只做两件事：补上正确的标点与断句；"
+        "在语义明显转折的地方分段（用空行）。"
     ),
 }
+
+#: Removed by us, not by the model. Deliberately tiny.
+#:
+#: Every entry has to be a string that cannot appear inside an ordinary word,
+#: because this runs as a blind substring replace. 「额」 was in an earlier draft
+#: and would have turned 额度 into 度; 「呐」 would have broken 呐喊; 「就是说」
+#: is a real discourse marker in academic Chinese and removing it changes the
+#: prose. All three are gone. When in doubt, leave it in the transcript — a
+#: stray 「呃」 is a blemish, a mangled word is a lie.
+_STRIP_FILLERS = ("嗯", "呃", "唔")
+
+#: Stammers, collapsed to one rather than deleted.
+_STAMMERS = ("那个", "这个", "就是", "然后", "我觉得")
+
+_ENGLISH_FILLER = re.compile(r"\b(um+|uh+|erm+)\b[,.]?\s*", re.IGNORECASE)
+#: Punctuation left stranded by a removal: a comma that now opens a clause, or
+#: two in a row where a filler used to sit between them.
+_ORPHAN_LEAD = re.compile(r"(^|[\n。！？.!?])\s*[，、,]+")
+_DOUBLED = re.compile(r"([，。？！、；：,.?!;:])[，、,]+")
+
+
+def strip_fillers(text: str) -> str:
+    """Remove filler words mechanically. Deterministic, and auditable by eye.
+
+    Runs after the content guard has approved the model's punctuation, so the
+    only difference between what was checked and what is delivered is this
+    function — which is a fixed list and a few regexes, not a model.
+    """
+    out = text
+    for filler in _STRIP_FILLERS:
+        out = out.replace(filler, "")
+    out = _ENGLISH_FILLER.sub("", out)
+
+    for word in _STAMMERS:
+        # 那个那个那个 -> 那个. Only immediate repeats; a word used twice in a
+        # sentence is not a stammer.
+        pattern = re.compile(f"(?:{re.escape(word)}[，、,]?\\s*){{2,}}")
+        out = pattern.sub(word, out)
+
+    out = _DOUBLED.sub(r"\1", out)
+    out = _ORPHAN_LEAD.sub(r"\1", out)
+    return out.strip()
 
 TRANSLATE_PROMPT = (
     "你是一个学术翻译工具。把下面的英文译成中文。"
@@ -239,6 +289,11 @@ def safe_polish(
     if changed is not None:
         log.warning("polish changed the content (%s), keeping the raw transcript", changed)
         return text, False
+
+    if level in ("medium", "heavy"):
+        # Ours, after the guard, so the delivered text differs from the checked
+        # text only by a fixed list the author can read in the source.
+        result = strip_fillers(result)
 
     return result, True
 

@@ -17,6 +17,7 @@ against a determined race.
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +36,18 @@ class AlreadyRunning:
             f"  先停掉那个：  kill {self.pid}\n"
             "  然后再启动这一个。"
         )
+
+
+#: A dictation daemon, however it was launched. Both spellings exist in the
+#: wild: `utter dictate` from the installed console script, and
+#: `python -m backend.cli dictate` from inside the repo, which is how the
+#: eleven-hour one was started.
+def _is_dictation(command: str) -> bool:
+    if "dictate" not in command:
+        return False
+    if "/utter " in command or command.endswith("/utter"):
+        return True
+    return "backend.cli" in command or "backend/cli" in command
 
 
 def _alive(pid: int) -> bool:
@@ -68,6 +81,9 @@ class InstanceLock:
         self.held = False
 
     def existing_owner(self) -> AlreadyRunning | None:
+        return self._from_lock_file() or self._from_process_list()
+
+    def _from_lock_file(self) -> AlreadyRunning | None:
         try:
             pid = int(self.path.read_text().strip())
         except (OSError, ValueError):
@@ -75,6 +91,38 @@ class InstanceLock:
         if pid == os.getpid() or not _alive(pid):
             return None
         return AlreadyRunning(pid=pid)
+
+    def _from_process_list(self) -> AlreadyRunning | None:
+        """Look for a sibling that never wrote a lock file.
+
+        The lock file alone was not enough, and the gap showed up the day it
+        shipped: the daemon that had been running since that morning predated
+        the feature, so it held no lock, and a new daemon started happily
+        alongside it. Both grabbed the hotkey; both grabbed the microphone.
+
+        Any daemon whose lock file was lost — a crash between writing and
+        cleanup, a cleared temp directory — lands in the same place. Asking the
+        process table costs one `ps` at startup and closes both.
+        """
+        try:
+            listing = subprocess.run(
+                ["ps", "-Ao", "pid=,command="],
+                capture_output=True, text=True, timeout=5, check=True,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+        mine = os.getpid()
+        for line in listing.splitlines():
+            pid_text, _, command = line.strip().partition(" ")
+            try:
+                pid = int(pid_text)
+            except ValueError:
+                continue
+            if pid == mine or not _is_dictation(command):
+                continue
+            return AlreadyRunning(pid=pid)
+        return None
 
     def acquire(self) -> AlreadyRunning | None:
         """Take the lock, or say who has it. Never raises."""
