@@ -89,6 +89,34 @@ def _is_running(pid: int) -> bool:
         return False
 
 
+ACTIVATION_TIMEOUT_SECONDS = 1.5
+
+
+def _activate_and_wait(pid: int, timeout: float = ACTIVATION_TIMEOUT_SECONDS) -> bool:
+    """Bring an application forward and wait until it really is forward.
+
+    `activateWithOptions_` only *requests* activation; the application becomes
+    frontmost some tens of milliseconds later. Firing ⌘V straight afterwards
+    sends it to whoever is still in front — the author dictated from Claude,
+    switched to WeChat, and watched the text land in WeChat while the log
+    faithfully reported "injected into Claude". Both halves were telling the
+    truth; nothing waited in between.
+
+    Same shape of mistake as restoring the clipboard before the paste had
+    landed. Asynchronous means asynchronous.
+    """
+    _activate(pid)
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        front = _frontmost()
+        if front is not None and front.pid == pid:
+            # Frontmost is set slightly before the window is ready for input.
+            time.sleep(0.05)
+            return True
+        time.sleep(0.03)
+    return False
+
+
 def _activate(pid: int) -> None:
     try:
         from AppKit import NSRunningApplication
@@ -234,11 +262,22 @@ class Injector:
 
         front = _frontmost()
         if front is None or front.pid != self.target.pid:
-            # 铁律 13. The user is looking at something else; the text waits.
-            self._buffer.append(text)
-            return InjectionResult(
-                injected=False, buffered=True, reason=f"focus is on {front.name if front else 'unknown'}"
-            )
+            # The author's expectation, stated plainly: text belongs where they
+            # were when they started talking, whatever they wandered off to
+            # while saying it. So bring that window back — and *verify* it came
+            # back before typing into it.
+            #
+            # This is not the thing 铁律 13 forbids. That rule rejects posting
+            # keystrokes at a window that is not in front, because it fails
+            # silently and randomly. Activating the window and confirming it is
+            # frontmost fails visibly and deterministically: if it does not come
+            # forward, nothing is typed and the text waits.
+            if not _activate_and_wait(self.target.pid):
+                self._buffer.append(text)
+                return InjectionResult(
+                    injected=False, buffered=True,
+                    reason=f"{self.target.name} 没能切回前台（当时在 {front.name if front else '未知'}）",
+                )
 
         return self._paste(text)
 
@@ -252,7 +291,9 @@ class Injector:
             self._buffer.clear()
             return self._fall_back_to_clipboard(text)
 
-        _activate(self.target.pid)
+        if not _activate_and_wait(self.target.pid):
+            return InjectionResult(injected=False, buffered=True,
+                                   reason=f"{self.target.name} 没能切回前台")
         result = self._paste(text)
         if result.injected:
             self._buffer.clear()

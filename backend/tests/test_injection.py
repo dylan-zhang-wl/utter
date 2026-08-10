@@ -358,3 +358,62 @@ def test_the_clipboard_is_restored_only_after_the_paste_settles(rig):
 
 def test_settle_waits_long_enough_to_outlast_an_event_loop_turn():
     assert injection.PASTE_SETTLE_SECONDS >= 0.15
+
+
+# --- activation must land before the keystroke (reported 2026-08-10) ---------
+
+
+def test_focus_elsewhere_brings_the_original_window_back(rig, monkeypatch):
+    """The author's stated expectation: text belongs where they were when they
+    started talking, whatever they switched to while saying it."""
+    injector, board, keys, state = rig
+    injector.lock_target()
+    state["front"] = target(pid=200, name="WeChat")
+
+    def activate_and_wait(pid, timeout=1.5):
+        state["activated"].append(pid)
+        state["front"] = target(pid=pid, name="Obsidian")  # it really came forward
+        return True
+
+    monkeypatch.setattr(injection, "_activate_and_wait", activate_and_wait)
+    result = injector.inject(0, "text")
+
+    assert result.injected is True
+    assert state["activated"] == [100]
+
+
+def test_nothing_is_typed_if_the_window_does_not_come_forward(rig, monkeypatch):
+    """activateWithOptions_ only *requests* activation. Typing before it lands
+    sent the author's dictation into WeChat while the log said Claude."""
+    injector, board, keys, state = rig
+    injector.lock_target()
+    state["front"] = target(pid=200, name="WeChat")
+    monkeypatch.setattr(injection, "_activate_and_wait", lambda pid, timeout=1.5: False)
+
+    result = injector.inject(0, "text")
+
+    assert keys.pastes == 0, "must not type into whatever happens to be in front"
+    assert result.buffered is True
+    assert "WeChat" in result.reason
+
+
+def test_activation_wait_polls_until_frontmost(monkeypatch):
+    calls = {"n": 0}
+
+    def frontmost():
+        calls["n"] += 1
+        return injection.Target(pid=100, name="Late") if calls["n"] > 3 else \
+               injection.Target(pid=999, name="Other")
+
+    monkeypatch.setattr(injection, "_activate", lambda pid: None)
+    monkeypatch.setattr(injection, "_frontmost", frontmost)
+
+    assert injection._activate_and_wait(100, timeout=2.0) is True
+    assert calls["n"] > 3, "it waited rather than trusting the request"
+
+
+def test_activation_wait_gives_up_rather_than_hanging(monkeypatch):
+    monkeypatch.setattr(injection, "_activate", lambda pid: None)
+    monkeypatch.setattr(injection, "_frontmost", lambda: injection.Target(pid=999, name="Other"))
+
+    assert injection._activate_and_wait(100, timeout=0.2) is False
