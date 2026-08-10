@@ -32,6 +32,18 @@ class Stage:
 class Stopwatch:
     dropped_chunks: int = 0
     audio_seconds: float | None = None
+    held_seconds: float | None = None
+    """Wall clock from key down to key up. Without it, `audio_seconds` cannot be
+    read: 22.6 seconds of audio is either a 22.6-second hold that worked or a
+    60-second hold that lost two thirds of itself, and those need opposite fixes."""
+    speech_seconds: float | None = None
+    """How much of that audio the VAD heard anyone talking in. Separates "the
+    model dropped what I said" from "the recording contains three seconds of
+    speech and twenty of me holding the key while thinking"."""
+    overflows: int = 0
+    """PortAudio input overflows — audio the operating system discarded before
+    our callback ran. Counted since day one and never once shown, which is the
+    silent loss this project keeps promising not to do."""
     target_note: str | None = None
     repetition_note: str | None = None
     segments_note: str | None = None
@@ -137,7 +149,32 @@ class Stopwatch:
             # Printed on every dictation, not only on failure. It is the only
             # way the user can tell "the model misheard me" apart from "the
             # recording was shorter than what I said".
-            lines.append(f"  录到音频 {self.audio_seconds:.1f}s")
+            line = f"  录到音频 {self.audio_seconds:.1f}s"
+            if self.held_seconds is not None:
+                line += f"（按住 {self.held_seconds:.1f}s"
+                if self.speech_seconds is not None:
+                    line += f"，其中说话 {self.speech_seconds:.1f}s"
+                line += "）"
+            elif self.speech_seconds is not None:
+                line += f"（其中说话 {self.speech_seconds:.1f}s）"
+            lines.append(line)
+
+            # The microphone opens ~220ms after the key goes down (audio_source
+            # measured it), so a small gap is expected and not worth shouting
+            # about. A whole second is not: that is speech that was said and
+            # never recorded, and it looks from the outside exactly like the
+            # model failing.
+            if self.held_seconds is not None and self.held_seconds - self.audio_seconds > 1.0:
+                missing = self.held_seconds - self.audio_seconds
+                lines.append(
+                    f"  ⚠ 有 {missing:.1f}s 没录进来（按住的时间比录到的音频长这么多）。"
+                    "这不是模型的问题，是录音丢了"
+                )
+
+        if self.overflows:
+            lines.append(
+                f"  ⚠ 系统丢了 {self.overflows} 次输入缓冲（录音线程没跟上）"
+            )
 
         if self.target_note:
             lines.append(f"  {self.target_note}")

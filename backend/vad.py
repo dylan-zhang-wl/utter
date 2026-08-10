@@ -320,3 +320,35 @@ def has_speech(
             if voiced >= min_voiced_frames:
                 return True
     return False
+
+
+def speech_duration(
+    audio: np.ndarray,
+    speech_prob: Callable[[np.ndarray], float] | None = None,
+    sensitivity: float = 0.5,
+) -> float:
+    """Seconds of the buffer that contain speech.
+
+    `has_speech` answers a yes/no question and stops as soon as it can, which
+    makes it nearly free but leaves the interesting number unmeasured. When a
+    22-second recording comes back as one short sentence there are two very
+    different explanations — the model dropped most of it, or the buffer only
+    ever held three seconds of talking and nineteen of a held key — and no
+    amount of reasoning from the outside separates them.
+
+    It costs a full pass: 86 ms for 30 seconds of audio, 138 ms for 47, against
+    a 1.5 s budget. Not free, and worth it — a whole evening went into guessing
+    at a number this prints.
+    """
+    if audio is None or len(audio) < FRAME_SAMPLES:
+        return 0.0
+
+    if speech_prob is None:
+        speech_prob = SileroVad().speech_prob
+
+    voiced = 0
+    usable = len(audio) // FRAME_SAMPLES * FRAME_SAMPLES
+    for offset in range(0, usable, FRAME_SAMPLES):
+        if speech_prob(audio[offset : offset + FRAME_SAMPLES]) >= sensitivity:
+            voiced += 1
+    return voiced * FRAME_SAMPLES / SAMPLE_RATE

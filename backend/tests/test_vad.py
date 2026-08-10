@@ -369,3 +369,19 @@ def test_has_speech_accepts_real_speech():
 
     audio, _ = sf.read(path, dtype="float32")
     assert vad.has_speech(audio[: SR * 3]) is True
+
+
+def test_speech_duration_counts_only_the_talking():
+    """A recording is 20 seconds; how much of it is anyone speaking? Without
+    this the author cannot tell a model that dropped their words from a key
+    held down over silence."""
+    audio = frames(("v", 2.0), ("s", 6.0), ("v", 2.0))
+    assert vad.speech_duration(audio, speech_prob=loud_is_speech) == pytest.approx(4.0, abs=0.05)
+
+
+def test_speech_duration_is_zero_for_silence():
+    assert vad.speech_duration(frames(("s", 3.0)), speech_prob=loud_is_speech) == 0.0
+
+
+def test_speech_duration_is_zero_for_a_buffer_shorter_than_a_frame():
+    assert vad.speech_duration(np.zeros(100, dtype=np.float32), speech_prob=loud_is_speech) == 0.0

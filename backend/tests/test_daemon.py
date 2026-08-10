@@ -849,3 +849,113 @@ def test_each_dictation_stops_the_previous_level_pump():
     _t.sleep(0.3)
     assert th.active_count() <= before + 1, "level pumps are piling up"
     d.stop()
+
+
+def test_the_report_belongs_to_the_sentence_it_is_printed_beside():
+    """`last_timing` was assigned after `on_text`, so the CLI printed the
+    PREVIOUS utterance's numbers under the current utterance's text.
+
+    Not cosmetic. A whole evening of diagnosis was done on audio durations
+    paired with the wrong words, which sent the search after a truncation bug
+    that the numbers, read correctly, did not support.
+    """
+    class EchoLength:
+        """Says how long the audio it was handed is, so the text and the report
+        can be checked against each other directly."""
+
+        id = display_name = "echo"
+
+        def transcribe(self, audio, language=None, initial_prompt=None):
+            return f"{len(audio) / 16000:.1f}"
+
+    seen = []
+    d = build(
+        config=AppConfig(close_sentences=False),  # else the echo gains a full stop
+        stt=EchoLength(),
+        on_text=lambda u: seen.append(
+            (u.raw_text, d.last_timing.audio_seconds if d.last_timing else None)
+        ),
+    )
+    d.start()
+    for seconds in (1.0, 2.0, 3.0):
+        d.make_mic = lambda s=seconds: FakeMic(seconds=s)
+        d.begin_utterance()
+        d.end_utterance()
+        d.wait_idle()
+    d.stop()
+
+    assert [text for text, _ in seen] == ["1.0", "2.0", "3.0"]
+    for text, reported in seen:
+        assert float(text) == reported, "the report belongs to a different sentence"
+
+
+def test_the_report_says_how_long_the_key_was_held():
+    d = build()
+    d.start()
+    d.begin_utterance(at=100.0)
+    d.end_utterance(at=104.5)
+    d.wait_idle()
+    d.stop()
+
+    assert d.last_timing.held_seconds == pytest.approx(4.5)
+    assert "按住 4.5s" in d.last_timing.report()
+
+
+def test_audio_that_never_arrived_is_called_out():
+    """One second of recording for a twenty-second hold is not a model problem,
+    and the report must not let it read like one."""
+    d = build(mic=FakeMic(seconds=1.0))
+    d.start()
+    d.begin_utterance(at=0.0)
+    d.end_utterance(at=20.0)
+    d.wait_idle()
+    d.stop()
+
+    report = d.last_timing.report()
+    assert "19.0s 没录进来" in report
+    assert "不是模型的问题" in report
+
+
+def test_a_hold_that_matches_its_audio_is_not_flagged():
+    """The microphone opens ~220ms after the key goes down, so a small gap is
+    normal and must not cry wolf on every single dictation."""
+    d = build(mic=FakeMic(seconds=3.0))
+    d.start()
+    d.begin_utterance(at=0.0)
+    d.end_utterance(at=3.25)
+    d.wait_idle()
+    d.stop()
+
+    assert "没录进来" not in d.last_timing.report()
+
+
+def test_the_report_says_how_much_of_the_recording_was_speech():
+    """Separates "the model dropped what I said" from "I held the key for
+    twenty seconds and spoke for three"."""
+    d = build(speech_check=None)
+    d.make_mic = lambda: FakeMic(seconds=2.0)
+    # Stand in for the VAD: the fake mic's DC level is genuinely not speech.
+    d._speech_seconds = lambda audio: 0.4
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+    d.stop()
+
+    assert d.last_timing.speech_seconds == pytest.approx(0.4)
+    assert "其中说话 0.4s" in d.last_timing.report()
+
+
+def test_input_the_system_discarded_is_reported():
+    """PortAudio's overflow count has been collected since day one and shown
+    never — the silent loss this project keeps promising not to do."""
+    mic = FakeMic()
+    mic.overflows = 7
+    d = build(mic=mic)
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+    d.stop()
+
+    assert "系统丢了 7 次输入缓冲" in d.last_timing.report()

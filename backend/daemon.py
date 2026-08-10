@@ -38,7 +38,14 @@ from backend.punctuation import close_sentence, collapse_repetition
 from backend.punctuation import normalise as normalise_punctuation
 from backend.scratchpad import Scratchpad, SessionArchive
 from backend.timing import Stopwatch
-from backend.vad import SAMPLE_RATE, SileroVad, SpeechEnd, VadSegmenter, has_speech
+from backend.vad import (
+    SAMPLE_RATE,
+    SileroVad,
+    SpeechEnd,
+    VadSegmenter,
+    has_speech,
+    speech_duration,
+)
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +93,12 @@ SEGMENT_ABOVE_SECONDS = None
 # went to Whisper whole: 104 characters, two punctuation marks. What we want
 # here is the clause boundary, and that is what a breath is.
 CLAUSE_SILENCE_MS = 320
+
+# The gate's threshold, expressed in seconds rather than frames. Three 32ms
+# frames — `has_speech`'s own min_voiced_frames — so switching to a counting
+# pass did not quietly change what counts as silence.
+MIN_SPEECH_SECONDS = 3 * 512 / SAMPLE_RATE
+
 TARGET_MS_WITHOUT_POLISH = 1500
 TARGET_MS_WITH_POLISH = 3000
 
@@ -95,8 +108,13 @@ class _Job:
     index: int
     audio: np.ndarray
     started_at: float
-    dropped: int = 0
     """`perf_counter` at the moment the hotkey came up — the user's t=0."""
+    dropped: int = 0
+    overflows: int = 0
+    held: float | None = None
+    """How long the key was actually down. Compared against the length of the
+    audio, it is the difference between "the model dropped what I said" and
+    "what I said was never recorded"."""
 
 
 @dataclass
@@ -129,6 +147,7 @@ class DictationDaemon:
     _vad: object | None = field(init=False, default=None)
     _locked_at_press: str | None = field(init=False, default=None)
     _level_stop: threading.Event = field(init=False, default_factory=threading.Event)
+    _pressed_at: float | None = field(init=False, default=None)
 
     def __post_init__(self):
         if self.injector is None:
@@ -326,13 +345,15 @@ class DictationDaemon:
 
     def _on_hotkey(self, event: HotkeyEvent) -> None:
         if event.kind == "start":
-            self.begin_utterance()
+            self.begin_utterance(at=event.at)
         else:
             self.end_utterance(at=event.at)
 
-    def begin_utterance(self) -> None:
+    def begin_utterance(self, at: float | None = None) -> None:
         if self._mic is not None:
             return  # key repeat, or a second press before the first was released
+
+        self._pressed_at = at if at is not None else time.perf_counter()
 
         # Lock the target now rather than at the end: by then the user may have
         # switched windows, and the text belongs where they started talking.
@@ -374,13 +395,16 @@ class DictationDaemon:
         # draining takes 0.1ms, concatenating 0.1ms, and PortAudio's close takes
         # 130ms. Closing first put all of that on the user's critical path for
         # no reason — the audio is already in hand by then.
+        released = at if at is not None else time.perf_counter()
         chunks = list(mic.chunks())
         if chunks:
             job = _Job(
                 index=self._index,
                 audio=np.concatenate(chunks),
-                started_at=at if at is not None else time.perf_counter(),
+                started_at=released,
                 dropped=getattr(mic, "dropped", 0),
+                overflows=getattr(mic, "overflows", 0),
+                held=(released - self._pressed_at) if self._pressed_at is not None else None,
             )
             self._index += 1
             self._idle.clear()
@@ -467,8 +491,17 @@ class DictationDaemon:
         watch = Stopwatch(
             target_ms=TARGET_MS_WITH_POLISH if self._polishing else TARGET_MS_WITHOUT_POLISH,
             dropped_chunks=job.dropped,
+            overflows=job.overflows,
             audio_seconds=len(job.audio) / SAMPLE_RATE,
+            held_seconds=job.held,
         )
+        # Published before the work, not after. `on_text` prints this report, and
+        # `on_text` is called from inside this method — so assigning at the end
+        # meant every report the author read belonged to the *previous*
+        # sentence. Four rounds of analysis tonight were done on numbers paired
+        # with the wrong words. The Stopwatch is mutable and fills in as it goes,
+        # so an early reference is the whole fix.
+        self.last_timing = watch
         watch.mark("hotkey → buffer closed", (time.perf_counter() - job.started_at) * 1000)
 
         # The silence gate. Push-to-talk has no VAD in its segmentation path, so
@@ -478,14 +511,19 @@ class DictationDaemon:
         # fabricated sentence into the author's document is worse than any
         # latency problem in this project.
         with watch.span("speech check"):
-            speaking = (self.speech_check or self._has_speech)(job.audio)
+            if self.speech_check is not None:
+                speaking = self.speech_check(job.audio)
+            else:
+                # One pass, two answers. The gate needs a boolean and the report
+                # needs the duration, and scanning twice for that would be silly.
+                watch.speech_seconds = self._speech_seconds(job.audio)
+                speaking = watch.speech_seconds >= MIN_SPEECH_SECONDS
         if not speaking:
             log.info("utterance %d contained no speech, discarded", job.index)
             watch.skip("transcription", "no speech")
             if self.overlay is not None:
                 self.overlay.set_state("error", "没听到")
                 time.sleep(0.9)  # let the author see it before the finally hides it
-            self.last_timing = watch
             return
 
         try:
@@ -495,7 +533,6 @@ class DictationDaemon:
             # One utterance lost, the session continues. Nothing has been shown
             # to the user yet, so there is nothing inconsistent to clean up.
             log.warning("transcription failed for utterance %d", job.index, exc_info=True)
-            self.last_timing = watch
             return
 
         # Mechanical, and applied before anything else sees the text: only the
@@ -515,7 +552,6 @@ class DictationDaemon:
             log.warning("collapsed %d repetitions in utterance %d", repeats, job.index)
             watch.note_repetition(repeats)
         if not raw:
-            self.last_timing = watch
             return
 
         text, polished = raw, False
@@ -568,7 +604,6 @@ class DictationDaemon:
             except Exception:  # pragma: no cover
                 log.warning("on_text callback failed", exc_info=True)
 
-        self.last_timing = watch
         if watch.over_target:
             log.warning("dictation %d took %.0f ms", job.index, watch.total_ms)
 
@@ -659,6 +694,26 @@ class DictationDaemon:
             # sentence is bad; refusing to transcribe anything is worse.
             log.warning("speech check failed, transcribing anyway", exc_info=True)
             return True
+
+    def _speech_seconds(self, audio: np.ndarray) -> float:
+        """Seconds of talking in the buffer — the gate and the report in one pass.
+
+        On failure it returns the whole buffer length, which reads as "all
+        speech" and so lets the audio through. Same reasoning as `_has_speech`:
+        a broken gate must not become a mute button.
+        """
+        try:
+            if self._vad is None:
+                self._vad = SileroVad()
+            self._vad.reset()
+            return speech_duration(
+                audio,
+                speech_prob=self._vad.speech_prob,
+                sensitivity=self.config.vad_sensitivity,
+            )
+        except Exception:
+            log.warning("speech check failed, transcribing anyway", exc_info=True)
+            return len(audio) / SAMPLE_RATE
 
     #: Primes the decoder toward Simplified Chinese with ordinary punctuation.
     #: Whisper's Chinese output is unstable in two ways the author hit in real
