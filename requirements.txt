@@ -35,6 +35,13 @@ onnxruntime>=1.17
 # --- models ------------------------------------------------------------------
 huggingface-hub>=0.23       # tier downloader; reuses ~/.cache/huggingface
 
+# --- global hotkey and cursor injection (P2a) --------------------------------
+# ~30 MB on macOS, over half of it PyObjCTest shipped inside pyobjc-core.
+# Both capabilities need macOS Accessibility permission at runtime; without it
+# the listener receives nothing AND raises nothing, so backend/hotkey.py probes
+# AXIsProcessTrusted explicitly rather than appearing to work.
+pynput>=1.7 ; sys_platform == "darwin"
+
 # --- secrets -----------------------------------------------------------------
 keyring>=25.0               # macOS Keychain. 铁律 4: keys never touch disk in plain text
 

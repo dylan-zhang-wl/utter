@@ -78,6 +78,12 @@ def cmd_doctor(_args, out) -> int:
         detail = f"  — {reason}" if reason else ""
         print(f"  [{mark}] {provider.id:<16} {provider.display_name}{detail}", file=out)
 
+    print("\nDictation prerequisites", file=out)
+    for label, (ok, reason) in _dictation_checks(config).items():
+        mark = "✓" if ok else "✗"
+        detail = f"  — {reason}" if reason else ""
+        print(f"  [{mark}] {label}{detail}", file=out)
+
     print("\nModels", file=out)
     for usage in models.disk_usage(hardware=hardware):
         mark = "✓" if usage.present else "—"
@@ -87,6 +93,44 @@ def cmd_doctor(_args, out) -> int:
           f"polish={'on' if config.polish_enabled else 'off'} ({config.polish_level})",
           file=out)
     return 0
+
+
+def _dictation_checks(config) -> dict[str, tuple[bool, str]]:
+    """What P2a needs that P1 did not. Each line has to be actionable.
+
+    Both of these fail silently in their natural state — a missing Accessibility
+    grant makes the hotkey deaf without an error, and the wrong input device
+    just sounds bad — so `doctor` is where they become visible.
+    """
+    checks: dict[str, tuple[bool, str]] = {}
+
+    try:
+        from backend.hotkey import HotkeyListener
+
+        checks["辅助功能权限 (hotkey + injection)"] = HotkeyListener(
+            on_event=lambda _e: None
+        ).is_available()
+    except Exception as exc:  # pragma: no cover - defensive
+        checks["辅助功能权限 (hotkey + injection)"] = (False, str(exc))
+
+    try:
+        from backend import audio_source
+
+        devices = audio_source.list_devices()
+        if config.input_device is not None:
+            chosen = next((d for d in devices if d.index == config.input_device), None)
+            label = chosen.name if chosen else f"设备 {config.input_device} 不存在"
+            checks["麦克风"] = (chosen is not None, label)
+        else:
+            default = next((d for d in devices if d.is_default), None)
+            checks["麦克风"] = (
+                default is not None,
+                f"{default.name}（系统默认）" if default else "找不到任何输入设备",
+            )
+    except Exception as exc:  # pragma: no cover - defensive
+        checks["麦克风"] = (False, str(exc))
+
+    return checks
 
 
 def _llm_providers():
