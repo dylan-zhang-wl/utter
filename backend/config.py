@@ -56,11 +56,16 @@ class AppConfig(BaseModel):
     # Measured 2026-08-10 on 8s of speech: language="en" 1067ms, "zh" 1057ms,
     # None 1927ms. Whisper runs a separate detection pass when it is not told,
     # and that pass alone costs more than half the entire latency budget.
-    # None stays the default anyway, because the author writes in both languages
-    # and a wrong guess is worse than a slow answer — but `utter dictate` says
-    # so at startup, since 860ms is a lot to pay silently for something one
-    # config line fixes.
-    dictate_language: str | None = None
+    # Default is "zh" after measuring the author's own mixed-language dictation.
+    # Auto-detect does not merely cost time: Whisper carries ONE language token
+    # per 30s window, so a Chinese question after a long English passage came
+    # back TRANSLATED into English rather than transcribed. Pinning "zh" keeps
+    # Chinese as Chinese, leaves embedded English terms intact (verified on 13s
+    # of English including "Venuti" and "foreignisation"), and halves latency.
+    #
+    # This is the right default for THIS author, not universally — an
+    # English-only user should set "en".
+    dictate_language: str | None = "zh"
 
     # Two keys, not one key with a mode switch. Holding to insert a phrase and
     # toggling on to dictate a paragraph are different gestures used at
