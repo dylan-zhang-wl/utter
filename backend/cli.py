@@ -127,6 +127,15 @@ def _dictation_checks(config) -> dict[str, tuple[bool, str]]:
                 default is not None,
                 f"{default.name}（系统默认）" if default else "找不到任何输入设备",
             )
+
+        shared = audio_source.shared_with_output(config.input_device)
+        if shared:
+            checks["输入输出不共用设备"] = (
+                False,
+                f"{shared} 同时是麦克风和扬声器。听写时 macOS 会把它切到通话模式，"
+                "造成音画不同步、音量变化、转录质量下降。建议插一个 USB 麦克风，"
+                "或在 config.json 里把 input_device 设成别的设备（`utter doctor` 上方有编号）",
+            )
     except Exception as exc:  # pragma: no cover - defensive
         checks["麦克风"] = (False, str(exc))
 

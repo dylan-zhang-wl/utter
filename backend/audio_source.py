@@ -62,6 +62,30 @@ class Device:
     is_default: bool
 
 
+def shared_with_output(device_index: int | None = None) -> str | None:
+    """Name of the input device if it is also the default output, else None.
+
+    A headset used as both is almost always Bluetooth, and on macOS opening its
+    microphone drags the whole device from A2DP to the hands-free profile:
+    mono, low bitrate, extra latency. The author noticed it as video going out
+    of sync and the system volume changing — neither of which looks like it has
+    anything to do with a dictation tool.
+
+    No code can prevent that; it is what CoreAudio does when an app asks a
+    Bluetooth headset for input. What code can do is not trigger it when nobody
+    asked to dictate, and say out loud that it is happening.
+    """
+    try:
+        default_in, default_out = sd.default.device
+        index = device_index if device_index is not None else default_in
+        if index is None or default_out is None:
+            return None
+        name = sd.query_devices(index)["name"]
+        return name if name == sd.query_devices(default_out)["name"] else None
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
 def list_devices() -> list[Device]:
     """Input-capable devices only, with the system default marked.
 

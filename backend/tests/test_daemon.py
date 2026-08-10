@@ -516,10 +516,15 @@ def test_configured_language_is_passed_to_the_model():
     d.stop()
 
 
-def test_audio_is_warmed_at_startup():
+def test_audio_is_warmed_at_startup(monkeypatch):
     """Measured 2026-08-10: the first MicSource of a process takes 713ms to
     deliver audio, every one after ~220ms. Unwarmed, that 0.5s difference is
-    silently taken out of the opening of the author's first sentence."""
+    silently taken out of the opening of the author's first sentence.
+
+    Patched because the dev machine's default input IS its output (AirPods), so
+    the real check correctly skips the warm-up there.
+    """
+    monkeypatch.setattr(daemon_mod, "shared_with_output", lambda idx: None)
     mic = FakeMic()
     d = build(mic=mic)
     d.start()
@@ -596,4 +601,27 @@ def test_punctuation_width_is_normalised(monkeypatch):
     d.wait_idle()
 
     assert d.scratchpad.entries[0].text == "他说，I want to demonstrate, and then 他停下了。"
+    d.stop()
+
+
+def test_warm_up_is_skipped_on_a_shared_bluetooth_device(monkeypatch):
+    """Opening a headset's microphone switches it to call mode, degrading
+    whatever the author is listening to. Half a second off the first sentence
+    is not worth interrupting their music before they have said anything."""
+    monkeypatch.setattr(daemon_mod, "shared_with_output", lambda idx: "AirPods Pro")
+    mic = FakeMic()
+    d = build(mic=mic)
+    d.start()
+
+    assert mic.started == 0
+    d.stop()
+
+
+def test_warm_up_runs_on_a_dedicated_input(monkeypatch):
+    monkeypatch.setattr(daemon_mod, "shared_with_output", lambda idx: None)
+    mic = FakeMic()
+    d = build(mic=mic)
+    d.start()
+
+    assert mic.started >= 1
     d.stop()

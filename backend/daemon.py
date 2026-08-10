@@ -29,7 +29,7 @@ from typing import Callable
 
 import numpy as np
 
-from backend.audio_source import MicSource
+from backend.audio_source import MicSource, shared_with_output
 from backend.config import AppConfig
 from backend.hotkey import HotkeyError, HotkeyEvent, HotkeyListener
 from backend.injection import Injector
@@ -202,6 +202,15 @@ class DictationDaemon:
         lights the microphone indicator for as long as the daemon runs. That is
         a privacy trade the author should make deliberately, not one to slip in.
         """
+        shared = shared_with_output(self.config.input_device)
+        if shared:
+            # Opening this device would switch a Bluetooth headset into call
+            # mode — degrading whatever the author is listening to, before they
+            # have dictated a single word. Half a second off the first sentence
+            # is not worth interrupting their music to buy.
+            log.info("skipping audio warm-up: %s is also the output device", shared)
+            return
+
         try:
             started = time.perf_counter()
             mic = self.make_mic()
@@ -344,7 +353,16 @@ class DictationDaemon:
 
         if self.config.dictate_target == "cursor":
             with watch.span("clipboard + paste"):
-                self.injector.inject(job.index, text)
+                result = self.injector.inject(job.index, text)
+            # Whether the text landed, and where, was invisible until now — the
+            # report showed a duration for an injection that may never have
+            # happened. 铁律 8 is about not losing text silently; not saying
+            # where it went is the same failure one step later.
+            target = getattr(self.injector, "target", None)
+            if result.injected:
+                watch.note_target(getattr(target, "name", "?"))
+            else:
+                watch.note_target(getattr(target, "name", "?"), failed=result.reason)
 
         if self.on_text is not None:
             try:

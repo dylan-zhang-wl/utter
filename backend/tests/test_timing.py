@@ -212,3 +212,24 @@ def test_nested_spans_are_recorded_separately():
             pass
 
     assert {s.name for s in watch.stages} == {"outer", "inner"}
+
+
+def test_report_says_where_the_text_went():
+    """Until this existed the report showed a duration for an injection that
+    might never have happened. Not saying where text went is the same failure
+    as losing it, one step later."""
+    watch = timing.Stopwatch()
+    watch.mark("clipboard + paste", 45.0)
+    watch.note_target("Microsoft Word")
+
+    assert "Microsoft Word" in watch.report()
+
+
+def test_report_says_when_injection_failed_and_why():
+    watch = timing.Stopwatch()
+    watch.mark("clipboard + paste", 45.0)
+    watch.note_target("Safari", failed="focus is on Terminal")
+
+    report = watch.report()
+    assert "未注入" in report
+    assert "focus is on Terminal" in report

@@ -32,6 +32,7 @@ class Stage:
 class Stopwatch:
     dropped_chunks: int = 0
     audio_seconds: float | None = None
+    target_note: str | None = None
     target_ms: float | None = None
     stages: list[Stage] = field(default_factory=list)
 
@@ -52,6 +53,10 @@ class Stopwatch:
         finally:
             elapsed = (time.perf_counter() - started) * 1000
             self.stages.append(Stage(name=name, ms=elapsed, failed=failed))
+
+    def note_target(self, name: str, failed: str = "") -> None:
+        """Record where the text was sent, and whether it arrived."""
+        self.target_note = f"注入 → {name}" if not failed else f"⚠ 未注入 → {name}：{failed}"
 
     def mark(self, name: str, ms: float) -> None:
         """Record a stage measured elsewhere — the hotkey gap, for instance,
@@ -105,6 +110,9 @@ class Stopwatch:
             # way the user can tell "the model misheard me" apart from "the
             # recording was shorter than what I said".
             lines.append(f"  录到音频 {self.audio_seconds:.1f}s")
+
+        if self.target_note:
+            lines.append(f"  {self.target_note}")
 
         if self.dropped_chunks:
             lost = self.dropped_chunks / 10
