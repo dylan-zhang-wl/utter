@@ -124,3 +124,27 @@ def collapse_repetition(text: str, threshold: int = 4) -> tuple[str, int]:
         text = text[: match.start()] + unit + text[match.end() :]
 
     return text, removed
+
+
+_TERMINAL = "。？！.?!…、，,;；:："
+
+
+def close_sentence(text: str) -> str:
+    """Give an utterance a closing mark if it ends without one.
+
+    Measured on the author's own dictation, 2026-08-10: one utterance in seven
+    ended with any punctuation at all. The cause is the gesture — they release
+    the key as the last word lands, so Whisper receives audio that stops
+    mid-breath and declines to close a sentence it cannot tell has ended.
+
+    Permitted by 铁律 10, which allows adding punctuation and forbids changing
+    words. Nothing here touches a word. The mark follows the script of the last
+    character, so a Chinese sentence gets 。 and an English one gets a full stop.
+
+    Deliberately conservative about what it will not close: text already ending
+    in any punctuation, and text ending mid-clause on a comma, are left alone.
+    """
+    stripped = text.rstrip()
+    if not stripped or stripped[-1] in _TERMINAL:
+        return text
+    return stripped + ("。" if _is_cjk(stripped[-1]) else ".")

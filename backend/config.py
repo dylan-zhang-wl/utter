@@ -92,6 +92,11 @@ class AppConfig(BaseModel):
     # brushing the key silently starts recording everything said next. macOS uses
     # a double tap for its own dictation shortcut for the same reason.
     hotkey_toggle_double_tap: bool = True
+    # Whisper does not close a sentence when the audio stops mid-breath, which
+    # is every push-to-talk release. One utterance in seven came back with any
+    # end punctuation at all. Off if you dictate one sentence across several
+    # presses — a full stop mid-thought is worse than none.
+    close_sentences: bool = True
     dictate_target: Literal["cursor", "scratchpad"] = "cursor"
 
     # --- dictation post-processing (design §4.1g, §4.1h) ---

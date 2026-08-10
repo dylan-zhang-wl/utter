@@ -96,3 +96,38 @@ def test_reports_how_much_was_removed():
 
 def test_empty_is_safe():
     assert collapse_repetition("") == ("", 0)
+
+
+# --- closing an utterance (1 in 7 had punctuation, 2026-08-10) ---------------
+
+
+from backend.punctuation import close_sentence
+
+
+def test_chinese_gets_a_full_width_stop():
+    assert close_sentence("这句话没有标点") == "这句话没有标点。"
+
+
+def test_english_gets_a_half_width_stop():
+    assert close_sentence("this sentence has no stop") == "this sentence has no stop."
+
+
+def test_text_that_already_ends_properly_is_left_alone():
+    for ending in ("好的。", "really?", "什么！", "wait..."):
+        assert close_sentence(ending) == ending
+
+
+def test_a_trailing_comma_is_left_alone():
+    """Ending on a comma means the thought is unfinished; closing it would be
+    asserting something the author did not."""
+    assert close_sentence("首先，") == "首先，"
+
+
+def test_words_are_never_changed():
+    source = "多模态语篇的 semiotic potential"
+    assert close_sentence(source).startswith(source)
+
+
+def test_empty_is_safe():
+    assert close_sentence("") == ""
+    assert close_sentence("   ") == "   "

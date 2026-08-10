@@ -34,7 +34,7 @@ from backend.config import AppConfig
 from backend.hotkey import HotkeyError, HotkeyEvent, HotkeyListener
 from backend.injection import Injector
 from backend.pipeline import Utterance
-from backend.punctuation import collapse_repetition
+from backend.punctuation import close_sentence, collapse_repetition
 from backend.punctuation import normalise as normalise_punctuation
 from backend.scratchpad import Scratchpad, SessionArchive
 from backend.timing import Stopwatch
@@ -366,6 +366,8 @@ class DictationDaemon:
         # punctuation style across a code-switch, so a bilingual sentence comes
         # back with Chinese commas after English clauses.
         raw, repeats = collapse_repetition(normalise_punctuation((raw or "").strip()))
+        if self.config.close_sentences:
+            raw = close_sentence(raw)
         if repeats:
             # The bounded temperature ladder is supposed to escape these, and on
             # 2026-08-10 it did not: 13.4s of speech came back as 「英文是，」
