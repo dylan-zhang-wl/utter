@@ -224,8 +224,9 @@ def test_empty_combination_is_rejected():
 
 
 def test_parses_a_pynput_style_combination():
-    keys = hotkey.parse_combination("<cmd>+<alt>+d")
-    assert len(keys) == 3
+    """One slot per component; each slot holds the keys that satisfy it."""
+    slots = hotkey.parse_combination("<cmd>+<alt>+d")
+    assert len(slots) == 3
 
 
 def test_malformed_combination_raises_at_parse_not_at_first_press():
@@ -310,9 +311,11 @@ def test_key_events_reach_the_matcher(monkeypatch, fake_pynput):
     listener = hotkey.HotkeyListener(combination="<cmd>+<alt>", on_event=events.append)
     listener.start()
 
+    from pynput import keyboard as kb
+
     stub = fake_pynput["listeners"][0]
-    for key in hotkey.parse_combination("<cmd>+<alt>"):
-        stub.on_press(key)
+    stub.on_press(kb.Key.cmd)
+    stub.on_press(kb.Key.alt)
 
     assert kinds(events) == ["start"]
     listener.close()
@@ -341,3 +344,64 @@ def fake_pynput(monkeypatch):
 
     monkeypatch.setattr(hotkey.keyboard, "Listener", FakeListener)
     return state
+
+
+# --- side-specific modifiers (added after measuring pynput on 2026-08-10) ----
+
+
+def test_right_option_alone_is_a_valid_combination():
+    """The best push-to-talk key available: nothing is bound to right Option,
+    and it is comfortable to hold for the length of a sentence."""
+    from pynput import keyboard as kb
+
+    slots = hotkey.parse_combination("<alt_r>")
+    assert slots == frozenset({frozenset({kb.Key.alt_r})})
+
+
+def test_side_agnostic_modifier_accepts_either_side():
+    from pynput import keyboard as kb
+
+    slot = next(iter(hotkey.parse_combination("<alt>")))
+    assert kb.Key.alt_l in slot
+    assert kb.Key.alt_r in slot
+
+
+def test_right_option_does_not_fire_on_left_option():
+    """pynput's canonical() folds alt_r into alt, which would make these the
+    same key. Measured on macOS: right arrives as Key.alt_r, left as Key.alt."""
+    from pynput import keyboard as kb
+
+    events = []
+    m = hotkey.HotkeyMatcher(
+        combination=hotkey.parse_combination("<alt_r>"), mode="push", on_event=events.append
+    )
+    m.press(kb.Key.alt)
+    assert events == []
+
+    m.press(kb.Key.alt_r)
+    assert [e.kind for e in events] == ["start"]
+
+
+def test_side_agnostic_fires_on_either_side():
+    from pynput import keyboard as kb
+
+    for key in (kb.Key.alt_l, kb.Key.alt_r):
+        events = []
+        m = hotkey.HotkeyMatcher(
+            combination=hotkey.parse_combination("<alt>"), mode="push", on_event=events.append
+        )
+        m.press(key)
+        assert [e.kind for e in events] == ["start"], key
+
+
+def test_modifiers_skip_canonicalisation(monkeypatch, fake_pynput):
+    """canonical() would erase the side distinction before the matcher sees it."""
+    from pynput import keyboard as kb
+
+    monkeypatch.setattr(hotkey, "_accessibility_trusted", lambda: True)
+    listener = hotkey.HotkeyListener(combination="<alt_r>", on_event=lambda e: None)
+    listener.start()
+    fake_pynput["listeners"][0].canonical = lambda key: kb.Key.alt  # the folding
+
+    assert listener._canonical(kb.Key.alt_r) is kb.Key.alt_r
+    listener.close()

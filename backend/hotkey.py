@@ -55,36 +55,100 @@ class HotkeyEvent:
     """`time.perf_counter()`, not wall clock — Task 3 measures latency from here."""
 
 
-def parse_combination(spec: str) -> frozenset:
-    """Parse a pynput-style spec such as "<cmd>+<alt>+d".
+# Side-specific modifiers, which pynput's own parser cannot express usefully.
+#
+# `HotKey.parse("<alt_r>")` yields a bare virtual keycode, while the listener
+# reports `Key.alt_r`; and `listener.canonical()` folds `Key.alt_r` down to
+# `Key.alt`, so left and right become indistinguishable. Measured on macOS
+# 2026-08-10: right Option arrives as `Key.alt_r`, left as `Key.alt`.
+#
+# This matters because a single side-specific modifier is the best push-to-talk
+# key there is — nothing is bound to right Option alone, and it is comfortable to
+# hold for the length of a sentence.
+_SIDED = {
+    "alt_r": keyboard.Key.alt_r,
+    "alt_l": keyboard.Key.alt_l,
+    "cmd_r": keyboard.Key.cmd_r,
+    "cmd_l": keyboard.Key.cmd_l,
+    "ctrl_r": keyboard.Key.ctrl_r,
+    "ctrl_l": keyboard.Key.ctrl_l,
+    "shift_r": keyboard.Key.shift_r,
+    "shift_l": keyboard.Key.shift_l,
+}
 
-    Raises at parse time so a typo in the config fails at startup, while the
-    user is looking at the terminal, rather than the first time they reach for
-    a hotkey that turns out not to exist.
+# A side-agnostic modifier is satisfied by either side.
+_EITHER_SIDE = {
+    keyboard.Key.alt: {keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r},
+    keyboard.Key.cmd: {keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r},
+    keyboard.Key.ctrl: {keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r},
+    keyboard.Key.shift: {keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r},
+}
+
+
+def parse_combination(spec: str) -> frozenset[frozenset]:
+    """Parse a spec such as "<alt_r>" or "<cmd>+<alt>+d".
+
+    Returns one frozenset per slot, holding every raw key that satisfies it.
+    "<alt>" accepts either Option; "<alt_r>" accepts only the right one.
+
+    Raises at parse time, so a typo in the config fails at startup while the
+    user is looking at the terminal rather than the first time they reach for a
+    hotkey that turns out not to exist.
     """
     if not spec or not spec.strip():
         raise HotkeyError("hotkey combination is empty")
-    try:
-        return frozenset(keyboard.HotKey.parse(spec))
-    except Exception as exc:
-        raise HotkeyError(f"cannot parse hotkey {spec!r}: {exc}") from exc
+
+    slots = []
+    for part in spec.split("+"):
+        part = part.strip()
+        if not part:
+            raise HotkeyError(f"cannot parse hotkey {spec!r}: empty component")
+
+        name = part[1:-1] if part.startswith("<") and part.endswith(">") else None
+        if name in _SIDED:
+            slots.append(frozenset({_SIDED[name]}))
+            continue
+
+        try:
+            parsed = keyboard.HotKey.parse(part)
+        except Exception as exc:
+            raise HotkeyError(f"cannot parse hotkey {spec!r}: {exc}") from exc
+        if not parsed:
+            raise HotkeyError(f"cannot parse hotkey {spec!r}: {part!r} matched nothing")
+
+        key = parsed[0]
+        slots.append(frozenset(_EITHER_SIDE.get(key, {key})))
+
+    return frozenset(slots)
 
 
 class HotkeyMatcher:
-    """Key events in, start/stop events out. No pynput, no threads, no I/O."""
+    """Key events in, start/stop events out. No pynput, no threads, no I/O.
 
-    def __init__(self, combination: frozenset, mode: Mode, on_event: Callable[[HotkeyEvent], None]):
+    `combination` is a set of slots, each a set of raw keys that satisfy it —
+    see parse_combination. A plain set of keys is accepted too and treated as
+    one exact key per slot, which is what the tests use.
+    """
+
+    def __init__(self, combination, mode: Mode, on_event: Callable[[HotkeyEvent], None]):
         if mode not in MODES:
             raise ValueError(f"unknown hotkey mode {mode!r}; expected one of {MODES}")
         if not combination:
             raise ValueError("hotkey combination cannot be empty")
 
-        self.combination = combination
+        self.slots = [
+            slot if isinstance(slot, (set, frozenset)) else frozenset({slot})
+            for slot in combination
+        ]
+        self.combination = frozenset().union(*self.slots)
         self.mode = mode
         self.on_event = on_event
         self._held: set = set()
         self._engaged = False  # combination currently satisfied
         self._active = False  # dictation currently running
+
+    def _satisfied(self) -> bool:
+        return all(slot & self._held for slot in self.slots)
 
     def reset(self) -> None:
         """Forget which keys are down.
@@ -97,7 +161,7 @@ class HotkeyMatcher:
 
     def press(self, key) -> None:
         self._held.add(key)
-        if self._engaged or not self.combination <= self._held:
+        if self._engaged or not self._satisfied():
             # Already engaged means key repeat, which fires press over and over.
             # One dictation, not fifty.
             return
@@ -193,6 +257,14 @@ class HotkeyListener:
         self.close()
 
     def _canonical(self, key):
+        """Normalise letters for keyboard layout, but leave modifiers alone.
+
+        `listener.canonical()` folds Key.alt_r into Key.alt, which would make a
+        right-Option hotkey fire on the left one too. Modifiers have no layout
+        problem to solve, so they skip it.
+        """
+        if isinstance(key, keyboard.Key):
+            return key
         listener = self._listener
         return listener.canonical(key) if listener is not None else key
 
