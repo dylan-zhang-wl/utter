@@ -277,9 +277,29 @@ and macOS version. Note any application that needs the clipboard fallback.
 
 ## Task 8 — Wire polish, and verify the prompt against a real model
 
-**Blocked on the author.** Needs either Ollama installed and running, or an API
-key in the Keychain. Ask at this point, not before — every earlier task runs
-without an LLM.
+**Blocked on the author.** Every earlier task runs without an LLM.
+
+**Decided 2026-08-10: the author will use a hosted API rather than local Ollama.**
+OpenAICompatProvider already covers this — base_url plus a key in the Keychain,
+no new code. But it changes what the feature *is*, and that has to be said once
+plainly rather than discovered later:
+
+> Design §2 puts local-first at the centre: unpublished drafts and confidential
+> translations do not leave the machine. Transcription still honours that — it
+> runs on this Mac. **Polish over an API does not.** Every sentence sent for
+> polishing is an unpublished paragraph of the author's own writing arriving on
+> somebody else's server, and "free tier" usually means the provider reserves
+> broader rights over what passes through than a paid one does.
+>
+> This is the author's call and a reasonable one — the alternative costs a
+> 2-4 GB local model and a slower machine. What it must not be is a decision
+> made by accident. So: polish stays opt-in, `utter dictate` states at startup
+> when text is leaving the machine and where to, and the raw local transcript is
+> archived regardless (铁律 10) so nothing depends on the round trip.
+
+Provider choice is open. Groq is the fastest free tier and the most plausible
+default; DeepSeek and 硅基流动 are the same API shape. Whichever it is, the
+verification below is unchanged and is the part that matters.
 
 The wiring itself is small: `Pipeline` already accepts a `polish` callable and
 P1's providers are written and unit-tested. What has never happened is a single
