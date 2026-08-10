@@ -41,7 +41,11 @@ _COMPUTE = {"cuda": ("cuda", "float16"), "cpu": ("cpu", "int8")}
 
 class FasterWhisperProvider:
     id = "faster"
-    display_name = "Whisper (CTranslate2, CPU/CUDA)"
+    # The name says who it is for, because on this machine it looks redundant.
+    # It is the ONLY Whisper that runs on the author's non-Apple-Silicon
+    # machine and on Windows (铁律 6) — MLX has no backend there. Picking it on
+    # an M2 is a downgrade: same weights, CPU instead of the GPU.
+    display_name = "Whisper (CPU 版，给 Windows / Intel Mac 用)"
 
     def __init__(self, tier: str = "balanced", hardware=None):
         self._tier = tier

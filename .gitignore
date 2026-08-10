@@ -8,3 +8,5 @@ target/
 .env
 ~/LiveScribe/
 backend/models/
+.DS_Store
+.pytest_cache/

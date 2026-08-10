@@ -239,3 +239,62 @@ def test_no_arguments_prints_help():
 def test_unknown_command_fails():
     with pytest.raises(SystemExit):
         run(["frobnicate"])
+
+
+# --- session housekeeping -----------------------------------------------------
+
+
+def _archive(folder, name, days_old, segments=1):
+    import json
+    import os
+    import time
+
+    path = folder / f"session_{name}.jsonl"
+    path.write_text(
+        "".join(json.dumps({"index": i, "text": "话"}) + "\n" for i in range(segments)),
+        encoding="utf-8",
+    )
+    when = time.time() - days_old * 86400
+    os.utime(path, (when, when))
+    return path
+
+
+def test_prune_removes_only_the_old_archives(tmp_path, capsys):
+    from backend.cli import _prune_sessions
+
+    old = _archive(tmp_path, "20250101_000000", days_old=90)
+    recent = _archive(tmp_path, "20260810_000000", days_old=1)
+
+    _prune_sessions([old, recent], days=30, out=None)
+
+    assert not old.exists()
+    assert recent.exists()
+
+
+def test_prune_says_what_it_removed(tmp_path):
+    """Deleting the author's own words silently would be the same failure as
+    dropping audio silently — it has to say the number."""
+    import io
+
+    from backend.cli import _prune_sessions
+
+    old = _archive(tmp_path, "20250101_000000", days_old=90, segments=4)
+    buf = io.StringIO()
+    _prune_sessions([old], days=30, out=buf)
+
+    report = buf.getvalue()
+    assert "删掉了 1 个存档" in report
+    assert "4 段" in report
+
+
+def test_prune_with_nothing_old_enough_deletes_nothing(tmp_path):
+    import io
+
+    from backend.cli import _prune_sessions
+
+    recent = _archive(tmp_path, "20260810_000000", days_old=2)
+    buf = io.StringIO()
+    _prune_sessions([recent], days=30, out=buf)
+
+    assert recent.exists()
+    assert "都留着" in buf.getvalue()

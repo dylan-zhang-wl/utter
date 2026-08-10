@@ -385,6 +385,41 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
     return 0
 
 
+def _prune_sessions(files, days: int, out) -> int:
+    """Delete archives older than `days`. Says exactly what went.
+
+    VoiceInk keeps transcripts until you delete them and offers auto-delete
+    after 24 hours or 7 days; Superwhisper only added a retention setting in
+    2026 and still has no bulk delete, so its users write cron jobs. Both store
+    the audio as well, which is what actually fills a disk.
+
+    Utter never writes audio (铁律 3), so this is housekeeping rather than a
+    space problem — which is why it is a command the author runs, not a policy
+    that deletes their words behind their back.
+    """
+    import time
+
+    cutoff = time.time() - days * 86400
+    doomed = [p for p in files if p.stat().st_mtime < cutoff]
+    if not doomed:
+        print(f"没有超过 {days} 天的存档，{len(files)} 个都留着。", file=out)
+        return 0
+
+    freed = sum(p.stat().st_size for p in doomed)
+    segments = sum(1 for p in doomed for _ in p.open())
+    for path in doomed:
+        try:
+            path.unlink()
+        except OSError as exc:  # pragma: no cover - defensive
+            print(f"  删不掉 {path.name}：{exc}", file=out)
+    print(
+        f"删掉了 {len(doomed)} 个存档（{segments} 段、{freed/1024:.0f} KB），"
+        f"剩下 {len(files) - len(doomed)} 个。",
+        file=out,
+    )
+    return 0
+
+
 def cmd_sessions(args, out) -> int:
     """Read back what was dictated. The archive existed from day one but there
     was no way to look at it without knowing the file layout."""
@@ -398,10 +433,25 @@ def cmd_sessions(args, out) -> int:
         print(f"还没有存档（会写到 {folder}）", file=out)
         return 0
 
+    if getattr(args, "prune", None) is not None:
+        return _prune_sessions(files, args.prune, out)
+
     if args.list:
         for path in files[: args.limit]:
             lines = sum(1 for _ in path.open())
             print(f"  {path.stem[8:]}  {lines} 段  {path}", file=out)
+        total = sum(p.stat().st_size for p in files)
+        segments = sum(1 for p in files for _ in p.open())
+        # Printed because the author asked whether this grows without bound.
+        # It does grow — but 铁律 3 keeps audio out of it, and text is three
+        # orders of magnitude cheaper than the recordings other dictation apps
+        # keep. The number is the argument.
+        print(
+            f"\n  共 {len(files)} 个存档、{segments} 段、{total/1024:.0f} KB"
+            f"（平均每段 {total/max(segments,1):.0f} 字节，只有文字，没有录音）\n"
+            f"  清理旧的：utter sessions --prune 30",
+            file=out,
+        )
         return 0
 
     path = files[0]
@@ -525,6 +575,12 @@ def build_parser() -> argparse.ArgumentParser:
     sessions = sub.add_parser("sessions", help="read back what was dictated")
     sessions.add_argument("--list", action="store_true", help="list sessions instead of printing the latest")
     sessions.add_argument("--limit", type=int, default=10)
+    sessions.add_argument(
+        "--prune",
+        type=int,
+        metavar="DAYS",
+        help="delete archives older than DAYS days (no default — you name the number)",
+    )
 
     keys = sub.add_parser("keys", help="find a hotkey nothing else has claimed")
     keys.add_argument("--seconds", type=float, default=60.0)
