@@ -204,6 +204,11 @@ class DictationDaemon:
             except Exception:  # pragma: no cover - defensive
                 log.warning("could not pre-build the keyboard controller", exc_info=True)
 
+        overgrown = self._check_vocabulary_fits()
+        if overgrown:
+            log.warning("vocabulary prompt exceeds Whisper's channel")
+            print(f"\n{overgrown}\n", flush=True)
+
         self.hotkey = self.hotkey_factory(self._on_hotkey)
         self.hotkey.start()  # raises HotkeyError without Accessibility
 
@@ -722,6 +727,31 @@ class DictationDaemon:
     #: shown an example. Measured 2026-08-10: adding this line recovered the
     #: full stop and question mark that were missing without it.
     ZH_PRIMER = "以下是简体中文的学术口述内容。"
+
+    # Whisper's initial_prompt is capped at `n_text_ctx // 2 - 1` = 223 tokens,
+    # and anything longer is **silently truncated from the front** — the oldest
+    # terms in the list vanish and nothing anywhere says so.
+    #
+    # Measured on the author's own 30-term list: 340 characters = 133 tokens,
+    # so about 2.5 characters per token for this Chinese/English mix. 500
+    # characters leaves headroom under 223 tokens while still catching a list
+    # that has quietly outgrown the channel. The author intends to keep adding
+    # terminology, so the ceiling will be reached, and reaching it must not be
+    # the kind of thing you find out from a transcript.
+    VOCAB_PROMPT_LIMIT_CHARS = 500
+
+    def _check_vocabulary_fits(self) -> str | None:
+        """Warn if the terminology list has outgrown Whisper's prompt channel."""
+        prompt = self._vocabulary_prompt()
+        if not prompt or len(prompt) <= self.VOCAB_PROMPT_LIMIT_CHARS:
+            return None
+        return (
+            f"⚠ 术语表太长了（{len(self.config.vocabulary)} 条、{len(prompt)} 字）。\n"
+            f"  Whisper 的提示通道上限约 223 个 token（约 {self.VOCAB_PROMPT_LIMIT_CHARS} 字），"
+            "超出的部分会被**从头截掉**，而且不会有任何提示。\n"
+            "  在 ~/Utter/config.json 的 vocabulary 里删掉一些不常说的词，"
+            "把名额留给最容易被听错的那几个。"
+        )
 
     def _vocabulary_prompt(self) -> str | None:
         """The initial_prompt: design §4.1g layer 1, plus script priming.

@@ -959,3 +959,25 @@ def test_input_the_system_discarded_is_reported():
     d.stop()
 
     assert "系统丢了 7 次输入缓冲" in d.last_timing.report()
+
+
+def test_a_vocabulary_that_outgrows_whispers_prompt_is_called_out(capsys):
+    """Whisper truncates initial_prompt from the front at 223 tokens and says
+    nothing. A terminology list the author keeps adding to WILL reach that, and
+    finding out from a transcript is not acceptable."""
+    config = AppConfig(vocabulary=[f"术语{i}foreignisation" for i in range(60)])
+    d = build(config=config)
+    d.start()
+    d.stop()
+
+    out = capsys.readouterr().out
+    assert "术语表太长了" in out
+    assert "从头截掉" in out
+
+
+def test_the_authors_current_list_does_not_trip_the_warning():
+    """30 terms is 340 characters — 133 tokens against a 223 ceiling. There is
+    room to grow, and crying wolf now would train the author to ignore it."""
+    config = AppConfig(vocabulary=["multimodality", "semiotic resource", "Venuti"] * 10)
+    d = build(config=config)
+    assert d._check_vocabulary_fits() is None
