@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import time
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -133,6 +134,11 @@ class MicSource:
         #: transcription needs.
         self.last_chunk = None
         self.stopped_reason: str | None = None
+        #: `perf_counter` when the first chunk arrived. Against the moment the
+        #: hotkey went down, this is exactly how much of the author's first word
+        #: was never recorded — the number they have been describing as "the
+        #: first second or two goes missing".
+        self.first_chunk_at: float | None = None
 
     # -- lifecycle --
 
@@ -194,6 +200,9 @@ class MicSource:
             # An overflow means we were too slow for one buffer. Worth counting,
             # never worth killing a dictation in progress over.
             self.overflows += 1
+
+        if self.first_chunk_at is None:
+            self.first_chunk_at = time.perf_counter()
 
         audio = np.asarray(frames, dtype=np.float32)
         if audio.ndim > 1:

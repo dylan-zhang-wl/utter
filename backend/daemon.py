@@ -115,6 +115,9 @@ class _Job:
     """How long the key was actually down. Compared against the length of the
     audio, it is the difference between "the model dropped what I said" and
     "what I said was never recorded"."""
+    mic_open: float | None = None
+    """Milliseconds from the key going down to the first frame of audio. This
+    is the opening of the author's first word, and it is simply gone."""
 
 
 @dataclass
@@ -360,6 +363,30 @@ class DictationDaemon:
 
         self._pressed_at = at if at is not None else time.perf_counter()
 
+        # The microphone goes first, ahead of everything else this method does.
+        #
+        # It used to go last, after locking the target and raising the overlay.
+        # Measured on this machine: asking AppKit which app is frontmost costs
+        # 82ms and the panel costs more, and every one of those milliseconds is
+        # speech the author had already started saying. CoreAudio's own ~240ms
+        # is unavoidable without holding the stream open permanently; this part
+        # was ours and was free to give back.
+        #
+        # Nothing below depends on the microphone, and the target lock is still
+        # taken at press time — a quarter of a second later is still press time.
+        try:
+            self._mic = self.make_mic().start()
+        except Exception as exc:
+            # PortAudio prints its own wall of text to stderr before we ever see
+            # this. Say the one thing the author can act on.
+            log.warning("could not open the microphone: %s", exc)
+            print(
+                f"\n⚠ 打不开麦克风：{exc}\n"
+                "  跑 `utter mics` 看哪个设备真的能录到声音。\n",
+                flush=True,
+            )
+            self._mic = None
+
         # Lock the target now rather than at the end: by then the user may have
         # switched windows, and the text belongs where they started talking.
         locked = self.injector.lock_target()
@@ -377,19 +404,6 @@ class DictationDaemon:
             stop = self._level_stop = threading.Event()
             threading.Thread(target=self._pump_levels, args=(stop,), daemon=True,
                              name="utter-levels").start()
-
-        try:
-            self._mic = self.make_mic().start()
-        except Exception as exc:
-            # PortAudio prints its own wall of text to stderr before we ever see
-            # this. Say the one thing the author can act on.
-            log.warning("could not open the microphone: %s", exc)
-            print(
-                f"\n⚠ 打不开麦克风：{exc}\n"
-                "  跑 `utter mics` 看哪个设备真的能录到声音。\n",
-                flush=True,
-            )
-            self._mic = None
 
     def end_utterance(self, at: float | None = None) -> None:
         mic, self._mic = self._mic, None
@@ -410,6 +424,11 @@ class DictationDaemon:
                 dropped=getattr(mic, "dropped", 0),
                 overflows=getattr(mic, "overflows", 0),
                 held=(released - self._pressed_at) if self._pressed_at is not None else None,
+                mic_open=(
+                    (mic.first_chunk_at - self._pressed_at) * 1000
+                    if getattr(mic, "first_chunk_at", None) and self._pressed_at is not None
+                    else None
+                ),
             )
             self._index += 1
             self._idle.clear()
@@ -499,6 +518,7 @@ class DictationDaemon:
             overflows=job.overflows,
             audio_seconds=len(job.audio) / SAMPLE_RATE,
             held_seconds=job.held,
+            mic_open_ms=job.mic_open,
         )
         # Published before the work, not after. `on_text` prints this report, and
         # `on_text` is called from inside this method — so assigning at the end

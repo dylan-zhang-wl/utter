@@ -981,3 +981,76 @@ def test_the_authors_current_list_does_not_trip_the_warning():
     config = AppConfig(vocabulary=["multimodality", "semiotic resource", "Venuti"] * 10)
     d = build(config=config)
     assert d._check_vocabulary_fits() is None
+
+
+def test_the_microphone_starts_before_anything_else_in_begin_utterance():
+    """Locking the target costs 82ms of AppKit and the overlay costs more, and
+    every one of those milliseconds was speech the author had already begun.
+    Nothing in begin_utterance depends on the microphone, so it goes first."""
+    order = []
+
+    class Watching(FakeInjector):
+        def lock_target(self, target=None):
+            order.append("lock")
+            return super().lock_target(target)
+
+    class WatchingMic(FakeMic):
+        def start(self):
+            order.append("mic")
+            return super().start()
+
+    d = build(mic=WatchingMic(), injector=Watching())
+    d.start()
+    order.clear()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+    d.stop()
+
+    assert order[:2] == ["mic", "lock"]
+
+
+def test_the_report_says_how_much_of_the_first_word_was_lost():
+    mic = FakeMic()
+    d = build(mic=mic)
+    d.start()
+    d.begin_utterance(at=100.0)
+    mic.first_chunk_at = 100.31          # CoreAudio's usual ~240-310ms
+    d.end_utterance(at=104.0)
+    d.wait_idle()
+    d.stop()
+
+    assert "开麦 310 ms" in d.last_timing.report()
+
+
+def test_an_unusually_slow_microphone_open_is_flagged():
+    """~240ms is CoreAudio and unavoidable. 1.5s means something else has the
+    device — a second forgotten daemon, in the case that prompted this."""
+    mic = FakeMic()
+    d = build(mic=mic)
+    d.start()
+    d.begin_utterance(at=100.0)
+    mic.first_chunk_at = 101.5
+    d.end_utterance(at=104.0)
+    d.wait_idle()
+    d.stop()
+
+    assert "太久了" in d.last_timing.report()
+
+
+def test_the_microphone_open_is_not_counted_in_the_end_to_end_total():
+    """It happens while the author is still talking. Adding it to the total
+    would report a wait they never had."""
+    mic = FakeMic()
+    d = build(mic=mic)
+    d.start()
+    d.begin_utterance(at=100.0)
+    mic.first_chunk_at = 100.31
+    d.end_utterance(at=104.0)
+    d.wait_idle()
+    d.stop()
+
+    watch = d.last_timing
+    assert watch.mic_open_ms == pytest.approx(310, abs=1)
+    assert not any("开麦" in s.name for s in watch.stages)
+    assert 310 not in [round(s.ms) for s in watch.stages if s.ms is not None]

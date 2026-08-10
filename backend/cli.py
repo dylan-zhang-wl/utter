@@ -313,6 +313,18 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
             print(str(exc), file=out)
             return 1
 
+    # Before anything expensive. A second instance steals half the hotkey
+    # presses and half the microphone, and looks from the outside like a broken
+    # model — which is where two evenings went.
+    from backend.config import DEFAULT_DIR
+    from backend.instance_lock import InstanceLock
+
+    lock = InstanceLock(DEFAULT_DIR / "dictate.pid")
+    owner = lock.acquire()
+    if owner is not None:
+        print(f"\n{owner.message()}\n", file=out)
+        return 1
+
     def show(utterance):
         print(f"» {utterance.text}", file=out)
         if args.timing and daemon.last_timing is not None:
@@ -353,6 +365,7 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
         daemon.start()
     except HotkeyError as exc:
         print(f"\n{exc}", file=out)
+        lock.release()
         return 1
 
     print("就绪。按住热键说话，Ctrl-C 退出。\n", file=out)
@@ -365,6 +378,7 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
         pass
     finally:
         daemon.stop()
+        lock.release()
 
     if len(daemon.scratchpad):
         print(f"\n本次共 {len(daemon.scratchpad)} 段，已存档到 {daemon.scratchpad.archive.path}", file=out)

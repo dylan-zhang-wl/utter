@@ -44,6 +44,11 @@ class Stopwatch:
     """PortAudio input overflows — audio the operating system discarded before
     our callback ran. Counted since day one and never once shown, which is the
     silent loss this project keeps promising not to do."""
+    mic_open_ms: float | None = None
+    """Key down to first frame of audio. Deliberately NOT a stage: it happens
+    while the author is still speaking, so folding it into the end-to-end total
+    would double-count time they never waited through. It is reported on its own
+    line because it is the one delay that costs words rather than patience."""
     target_note: str | None = None
     repetition_note: str | None = None
     segments_note: str | None = None
@@ -170,6 +175,17 @@ class Stopwatch:
                     f"  ⚠ 有 {missing:.1f}s 没录进来（按住的时间比录到的音频长这么多）。"
                     "这不是模型的问题，是录音丢了"
                 )
+
+        if self.mic_open_ms is not None:
+            # ~240ms is CoreAudio opening the device and cannot be removed
+            # without holding the stream open all the time, which lights the
+            # microphone indicator for as long as the daemon runs. Past 600ms
+            # something else is wrong — a second daemon competing for the
+            # device is the one we have actually seen.
+            line = f"  开麦 {self.mic_open_ms:.0f} ms（按下→第一帧音频，这段话的开头）"
+            if self.mic_open_ms > 600:
+                line += "\n  ⚠ 这个太久了。先确认没有第二个 utter 在跑：pgrep -fl 'utter dictate'"
+            lines.append(line)
 
         if self.overflows:
             lines.append(
