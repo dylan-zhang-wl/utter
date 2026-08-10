@@ -322,3 +322,50 @@ def test_segments_real_speech():
     # The fixture is ten sentences separated by explicit 700ms silences.
     assert 6 <= len(utterances) <= 14, f"got {len(utterances)}"
     assert all(len(u.audio) > 0.2 * SR for u in utterances)
+
+
+# --- the silence gate --------------------------------------------------------
+
+
+def test_has_speech_is_false_for_silence():
+    """Push-to-talk has no VAD in its segmentation path, so this is the only
+    thing standing between an empty room and a hallucinated sentence in the
+    author's document."""
+    assert vad.has_speech(frames(("s", 2.0)), speech_prob=loud_is_speech) is False
+
+
+def test_has_speech_is_true_for_speech():
+    assert vad.has_speech(frames(("v", 1.0)), speech_prob=loud_is_speech) is True
+
+
+def test_has_speech_ignores_a_single_stray_frame():
+    """A door closing is one loud frame, not an utterance."""
+    audio = frames(("s", 0.5))
+    audio[8000:8200] = 0.5
+    assert vad.has_speech(audio, speech_prob=loud_is_speech) is False
+
+
+def test_has_speech_is_false_for_a_buffer_shorter_than_a_frame():
+    assert vad.has_speech(np.zeros(100, dtype=np.float32), speech_prob=loud_is_speech) is False
+
+
+def test_has_speech_is_false_for_nothing():
+    assert vad.has_speech(None, speech_prob=loud_is_speech) is False
+
+
+@pytest.mark.model
+def test_has_speech_rejects_real_silence():
+    assert vad.has_speech(frames(("s", 2.0))) is False
+
+
+@pytest.mark.model
+def test_has_speech_accepts_real_speech():
+    import os
+    import soundfile as sf
+
+    path = f"{os.environ.get('TMPDIR', '/tmp')}/utter-fixtures/bench-say-en.wav"
+    if not os.path.exists(path):
+        pytest.skip("run docs/benchmarks/make-fixture.sh first")
+
+    audio, _ = sf.read(path, dtype="float32")
+    assert vad.has_speech(audio[: SR * 3]) is True

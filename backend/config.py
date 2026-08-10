@@ -52,6 +52,24 @@ class AppConfig(BaseModel):
     vad_sensitivity: float = 0.5
     max_utterance_sec: int = 30
 
+    # --- dictation (P2a) ---
+    # Measured 2026-08-10 on 8s of speech: language="en" 1067ms, "zh" 1057ms,
+    # None 1927ms. Whisper runs a separate detection pass when it is not told,
+    # and that pass alone costs more than half the entire latency budget.
+    # None stays the default anyway, because the author writes in both languages
+    # and a wrong guess is worse than a slow answer — but `utter dictate` says
+    # so at startup, since 860ms is a lot to pay silently for something one
+    # config line fixes.
+    dictate_language: str | None = None
+
+    # Right Option alone. Nothing on macOS is bound to it, it is comfortable to
+    # hold for the length of a sentence, and it needs no second finger. Measured
+    # 2026-08-10: it does not fire on left Option — backend/hotkey.py explains
+    # why that took work.
+    hotkey: str = "<alt_r>"
+    hotkey_mode: Literal["push", "toggle"] = "push"
+    dictate_target: Literal["cursor", "scratchpad"] = "cursor"
+
     # --- dictation post-processing (design §4.1g, §4.1h) ---
     polish_enabled: bool = False
     polish_level: PolishLevel = "light"

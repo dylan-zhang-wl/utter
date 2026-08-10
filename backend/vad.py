@@ -284,3 +284,39 @@ class VadSegmenter:
         return SpeechEnd(
             start_sample=start, end_sample=end_sample, audio=audio, forced=forced
         )
+
+
+def has_speech(
+    audio: np.ndarray,
+    speech_prob: Callable[[np.ndarray], float] | None = None,
+    sensitivity: float = 0.5,
+    min_voiced_frames: int = 3,
+) -> bool:
+    """Is there actually anyone talking in here?
+
+    Push-to-talk has no VAD in its segmentation path — the finger decides the
+    boundaries — which leaves one hole: a hotkey pressed and released without
+    speaking hands Whisper a buffer of room tone. Whisper does not return
+    nothing for that. It hallucinates, confidently and briefly: measured on this
+    machine, two seconds of an empty room produced "you" and "Good job."
+
+    Injecting a fabricated sentence into the author's document is worse than any
+    latency problem in this project, so the buffer is checked before the model
+    ever sees it. The check costs about 0.4% of real time (design §5.4
+    measurement), which is free next to the second it saves when the answer is
+    no.
+    """
+    if audio is None or len(audio) < FRAME_SAMPLES:
+        return False
+
+    if speech_prob is None:
+        speech_prob = SileroVad().speech_prob
+
+    voiced = 0
+    usable = len(audio) // FRAME_SAMPLES * FRAME_SAMPLES
+    for offset in range(0, usable, FRAME_SAMPLES):
+        if speech_prob(audio[offset : offset + FRAME_SAMPLES]) >= sensitivity:
+            voiced += 1
+            if voiced >= min_voiced_frames:
+                return True
+    return False

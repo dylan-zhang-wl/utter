@@ -264,6 +264,63 @@ def cmd_transcribe(args, out, *, stt=None, translate=None, polish=None) -> int:
 # --- entry point -------------------------------------------------------------
 
 
+def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
+    """Run the resident dictation daemon until interrupted."""
+    from backend.daemon import DictationDaemon
+    from backend.hotkey import HotkeyError
+
+    config = load_config()
+    if args.target:
+        config.dictate_target = args.target
+    if args.mode:
+        config.hotkey_mode = args.mode
+
+    if stt is None:
+        try:
+            stt = get_stt_provider(preferred=config.stt_provider)
+        except NoProviderAvailable as exc:
+            print(str(exc), file=out)
+            return 1
+
+    def show(utterance):
+        print(f"» {utterance.text}", file=out)
+        if args.timing and daemon.last_timing is not None:
+            print(daemon.last_timing.report(), file=out)
+
+    daemon = DictationDaemon(config=config, stt=stt, polish=polish, on_text=show)
+
+    where = "光标处" if config.dictate_target == "cursor" else "暂存区（不注入）"
+    print(
+        f"Utter 听写已就绪\n"
+        f"  热键   {config.hotkey}  ({'按住说' if config.hotkey_mode == 'push' else '按一次开、再按一次停'})\n"
+        f"  输出   {where}\n"
+        f"  模型   {getattr(stt, 'display_name', stt)}\n"
+        f"  润色   {'开（' + config.polish_level + '）' if config.polish_enabled else '关'}\n"
+        f"  语言   {config.dictate_language or '自动检测'}"
+        f"{'   ⚠ 自动检测每句多花约 0.9 秒；在 ~/Utter/config.json 里设 dictate_language 可省下' if not config.dictate_language else ''}\n"
+        f"\n预热模型中…",
+        file=out,
+    )
+
+    try:
+        daemon.start()
+    except HotkeyError as exc:
+        print(f"\n{exc}", file=out)
+        return 1
+
+    print("就绪。按住热键说话，Ctrl-C 退出。\n", file=out)
+    try:
+        daemon.run_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        daemon.stop()
+
+    if len(daemon.scratchpad):
+        print(f"\n本次共 {len(daemon.scratchpad)} 段，已存档到 {daemon.scratchpad.archive.path}", file=out)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="utter", description="Utter — local-first speech")
     sub = parser.add_subparsers(dest="command")
@@ -278,6 +335,11 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--mode", choices=["listen", "dictate"], default="listen")
     transcribe.add_argument("--language", default=None)
     transcribe.add_argument("--timing", action="store_true", help="report per-utterance latency")
+
+    dictate = sub.add_parser("dictate", help="run the resident dictation daemon")
+    dictate.add_argument("--target", choices=["cursor", "scratchpad"], default=None)
+    dictate.add_argument("--mode", choices=["push", "toggle"], default=None)
+    dictate.add_argument("--timing", action="store_true", help="print a latency breakdown per utterance")
 
     return parser
 
@@ -296,6 +358,8 @@ def main(argv=None, stdout=None, **overrides) -> int:
         return cmd_models(args, out)
     if args.command == "transcribe":
         return cmd_transcribe(args, out, **overrides)
+    if args.command == "dictate":
+        return cmd_dictate(args, out, **overrides)
 
     parser.print_help(out)
     return 2
