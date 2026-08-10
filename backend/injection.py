@@ -144,10 +144,33 @@ class Pasteboard:
 
 
 class Keyboard:
-    def paste(self) -> None:
-        from pynput.keyboard import Controller, Key
+    """⌘V, with the Controller built once and kept.
 
-        controller = Controller()
+    Constructing a pynput Controller enters macOS's non-reentrant
+    `keycode_context`. Doing that on every paste, while a hotkey listener thread
+    is inside the same context, is how this process learned to die with SIGABRT
+    and no traceback (see HotkeyListener's docstring). Build it once, at a
+    moment of our choosing, and reuse it.
+    """
+
+    def __init__(self):
+        self._controller = None
+
+    def _get(self):
+        if self._controller is None:
+            from pynput.keyboard import Controller
+
+            self._controller = Controller()
+        return self._controller
+
+    def warm_up(self) -> None:
+        """Build the Controller now rather than mid-dictation."""
+        self._get()
+
+    def paste(self) -> None:
+        from pynput.keyboard import Key
+
+        controller = self._get()
         with controller.pressed(Key.cmd):
             controller.press("v")
             controller.release("v")

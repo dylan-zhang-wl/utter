@@ -71,8 +71,17 @@ class AppConfig(BaseModel):
     # by WeChat and a left-Option double tap taken by Claude, and macOS exposes
     # no way to enumerate what other apps have grabbed (see `utter keys`).
     # Either may be set to None to disable that gesture entirely.
-    hotkey_push: str | None = "<alt_r>"
-    hotkey_toggle: str | None = None
+    #
+    # The names are portable — pynput reports Key.alt_l and Key.ctrl_l on
+    # Windows and Linux too — but the *choice* is not. On Windows a bare tap of
+    # left Alt moves focus to the menu bar in most applications, so a Windows
+    # user should pick something else. Worth remembering before sharing this
+    # with a colleague.
+    # Chosen by the author on their own keyboard, 2026-08-10, after `utter keys`:
+    # right Option is WeChat's push-to-talk and right Command / F13 were awkward
+    # to reach. Both of these sit under the left hand, leaving the right free.
+    hotkey_push: str | None = "<alt_l>"
+    hotkey_toggle: str | None = "<ctrl_l>"
 
     # Double tap rather than single. A single press on a bare modifier is a trap:
     # brushing the key silently starts recording everything said next. macOS uses

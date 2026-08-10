@@ -132,14 +132,27 @@ def test_microphone_only_runs_during_an_utterance():
     mic = FakeMic()
     d = build(mic=mic)
     d.start()
-    assert mic.started == 0, "no hot mic while idle"
+    # start() opens one throwaway stream to warm CoreAudio, so count from here.
+    idle, idle_stops = mic.started, mic.stopped
 
     d.begin_utterance()
-    assert mic.started == 1
+    assert mic.started == idle + 1
 
     d.end_utterance()
     d.wait_idle()
-    assert mic.stopped == 1
+    assert mic.stopped >= idle_stops + 1
+    d.stop()
+
+
+def test_no_hot_microphone_while_idle():
+    """The warm-up stream is opened and closed again, not left running — an
+    always-on microphone lights the system indicator for as long as the daemon
+    lives, and that is a trade to make deliberately, not by accident."""
+    mic = FakeMic()
+    d = build(mic=mic)
+    d.start()
+
+    assert mic.stopped == mic.started, "every opened stream was closed again"
     d.stop()
 
 
@@ -219,10 +232,12 @@ def test_beginning_twice_does_not_start_two_microphones():
     mic = FakeMic()
     d = build(mic=mic)
     d.start()
+    baseline = mic.started
+
     d.begin_utterance()
     d.begin_utterance()
 
-    assert mic.started == 1
+    assert mic.started == baseline + 1
     d.stop()
 
 
@@ -498,4 +513,32 @@ def test_configured_language_is_passed_to_the_model():
     d.wait_idle()
 
     assert stt.calls[-1].get("language") == "en"
+    d.stop()
+
+
+def test_audio_is_warmed_at_startup():
+    """Measured 2026-08-10: the first MicSource of a process takes 713ms to
+    deliver audio, every one after ~220ms. Unwarmed, that 0.5s difference is
+    silently taken out of the opening of the author's first sentence."""
+    mic = FakeMic()
+    d = build(mic=mic)
+    d.start()
+
+    assert mic.started >= 1, "startup should have opened a throwaway stream"
+    d.stop()
+
+
+def test_audio_warm_up_failure_does_not_stop_the_daemon():
+    def broken():
+        raise RuntimeError("no audio device")
+
+    d = daemon_mod.DictationDaemon(
+        config=AppConfig(),
+        stt=FakeStt(),
+        make_mic=broken,
+        injector=FakeInjector(),
+        hotkey_factory=lambda on_event: FakeHotkey(on_event),
+        speech_check=lambda a: True,
+    )
+    d.start()  # must not raise
     d.stop()

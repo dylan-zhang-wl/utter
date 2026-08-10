@@ -32,10 +32,12 @@ _SPEC_FOR_KEY = {key: f"<{name}>" for name, key in _SIDED.items()}
 # author or is documented macOS behaviour. There is no way to generate it.
 KNOWN_CLAIMS = {
     "<alt_r>": "微信的语音键（作者 2026-08-10 实测冲突）",
-    "<alt_l>": "双击被 Claude 占用（作者实测）；单独按住通常没问题",
+    "<alt_l>": "双击被 Claude 占用（作者实测）。按住不受影响，但连着两次快速听写"
+               "可能被 Claude 误认成双击",
+    "<ctrl_l>": "Windows 上没问题；macOS 上若你把系统听写的快捷键设成了双击 Control，"
+                "两者会打架——去 系统设置→键盘→听写 看一眼",
     "<fn>": "macOS 自己的听写与表情面板",
     "<cmd_l>": "长按会触发部分应用的快捷键面板",
-    "<ctrl_l>": "macOS 听写的可选触发键之一",
 }
 
 

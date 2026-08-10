@@ -468,3 +468,50 @@ def test_double_tap_survives_holding():
     m.press(CMD)
     m.press(ALT)
     assert kinds(events) == ["start"]
+
+
+# --- one listener, many bindings (after a SIGABRT on 2026-08-10) -------------
+
+
+def test_multiple_bindings_share_one_listener(monkeypatch, fake_pynput):
+    """pynput's macOS backend enters a non-reentrant keycode_context from every
+    listener thread and every Controller construction. Two listeners plus the
+    injector's Controller aborted the process with no traceback. One listener
+    feeding several matchers is the fix, so the count is asserted."""
+    monkeypatch.setattr(hotkey, "_accessibility_trusted", lambda: True)
+    listener = hotkey.HotkeyListener(
+        on_event=lambda e: None,
+        bindings=[("<alt_l>", "push"), ("<ctrl_l>", "double_toggle")],
+    )
+    listener.start()
+
+    assert len(fake_pynput["listeners"]) == 1
+    assert len(listener.matchers) == 2
+    listener.close()
+
+
+def test_each_binding_gets_its_own_key(monkeypatch, fake_pynput):
+    from pynput import keyboard as kb
+
+    monkeypatch.setattr(hotkey, "_accessibility_trusted", lambda: True)
+    events = []
+    listener = hotkey.HotkeyListener(
+        on_event=events.append,
+        bindings=[("<alt_l>", "push"), ("<ctrl_l>", "double_toggle")],
+    )
+    listener.start()
+    stub = fake_pynput["listeners"][0]
+
+    stub.on_press(kb.Key.alt_l)
+    stub.on_release(kb.Key.alt_l)
+    assert kinds(events) == ["start", "stop"], "hold fired"
+
+    events.clear()
+    stub.on_press(kb.Key.ctrl_l)
+    stub.on_release(kb.Key.ctrl_l)
+    assert events == [], "a single tap on the toggle key must do nothing"
+
+    stub.on_press(kb.Key.ctrl_l)
+    stub.on_release(kb.Key.ctrl_l)
+    assert kinds(events) == ["start"], "double tap fired"
+    listener.close()

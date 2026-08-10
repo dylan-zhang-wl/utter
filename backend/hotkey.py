@@ -248,18 +248,36 @@ def _accessibility_trusted() -> bool:
 
 
 class HotkeyListener:
-    """pynput wiring around a HotkeyMatcher. Use as a context manager."""
+    """pynput wiring around one or more HotkeyMatchers.
+
+    **One `pynput.keyboard.Listener` per process, feeding every matcher.**
+
+    This is not tidiness. pynput's macOS backend enters a non-reentrant
+    `keycode_context` — a shared Text Input Source resource — from each listener
+    thread and from every `keyboard.Controller` construction. With two listeners
+    running and the injector building a Controller to send ⌘V, three threads
+    enter it at once and the process dies with SIGABRT, no Python traceback.
+
+    Measured 2026-08-10 while binding separate push and toggle keys: two
+    listeners alone were fine, two listeners plus a Controller aborted every
+    time. Since injection needs a Controller and dictation needs both gestures,
+    that combination is the normal case, not an edge one.
+    """
 
     def __init__(
         self,
-        on_event: Callable[[HotkeyEvent], None],
+        on_event: Callable[[HotkeyEvent], None] | None = None,
         combination: str = "<cmd>+<alt>",
         mode: Mode = "push",
+        bindings: list[tuple[str, Mode]] | None = None,
     ):
         # Parse eagerly: a bad combination should fail here, not on first press.
-        self.matcher = HotkeyMatcher(
-            combination=parse_combination(combination), mode=mode, on_event=on_event
-        )
+        pairs = bindings if bindings is not None else [(combination, mode)]
+        self.matchers = [
+            HotkeyMatcher(combination=parse_combination(spec), mode=m, on_event=on_event)
+            for spec, m in pairs
+        ]
+        self.matcher = self.matchers[0]  # the single-binding case reads better
         self.combination = combination
         self._listener = None
 
@@ -278,7 +296,8 @@ class HotkeyListener:
             # than one that never started.
             raise HotkeyError(reason)
 
-        self.matcher.reset()
+        for matcher in self.matchers:
+            matcher.reset()
         self._listener = keyboard.Listener(
             on_press=self._on_press, on_release=self._on_release
         )
@@ -309,13 +328,17 @@ class HotkeyListener:
         return listener.canonical(key) if listener is not None else key
 
     def _on_press(self, key) -> None:
-        try:
-            self.matcher.press(self._canonical(key))
-        except Exception:  # pragma: no cover - a listener callback must not die
-            log.warning("hotkey press handler failed", exc_info=True)
+        canonical = self._canonical(key)
+        for matcher in self.matchers:
+            try:
+                matcher.press(canonical)
+            except Exception:  # pragma: no cover - a callback must not die
+                log.warning("hotkey press handler failed", exc_info=True)
 
     def _on_release(self, key) -> None:
-        try:
-            self.matcher.release(self._canonical(key))
-        except Exception:  # pragma: no cover
-            log.warning("hotkey release handler failed", exc_info=True)
+        canonical = self._canonical(key)
+        for matcher in self.matchers:
+            try:
+                matcher.release(canonical)
+            except Exception:  # pragma: no cover
+                log.warning("hotkey release handler failed", exc_info=True)

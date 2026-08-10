@@ -47,25 +47,6 @@ TARGET_MS_WITHOUT_POLISH = 1500
 TARGET_MS_WITH_POLISH = 3000
 
 
-class _HotkeyGroup:
-    """Several listeners behind one start/close pair."""
-
-    def __init__(self, listeners):
-        self.listeners = listeners
-
-    def is_available(self):
-        return self.listeners[0].is_available()
-
-    def start(self):
-        for listener in self.listeners:
-            listener.start()
-        return self
-
-    def close(self):
-        for listener in self.listeners:
-            listener.close()
-
-
 @dataclass
 class _Job:
     index: int
@@ -114,30 +95,36 @@ class DictationDaemon:
         Returns something with start/close, so the daemon does not care whether
         one listener is running or two.
         """
-        listeners = []
+        bindings = []
         if self.config.hotkey_push:
-            listeners.append(
-                HotkeyListener(on_event=on_event, combination=self.config.hotkey_push,
-                               mode="push")
-            )
+            bindings.append((self.config.hotkey_push, "push"))
         if self.config.hotkey_toggle:
-            listeners.append(
-                HotkeyListener(
-                    on_event=on_event,
-                    combination=self.config.hotkey_toggle,
-                    mode="double_toggle" if self.config.hotkey_toggle_double_tap else "toggle",
-                )
-            )
-        if not listeners:
+            bindings.append((
+                self.config.hotkey_toggle,
+                "double_toggle" if self.config.hotkey_toggle_double_tap else "toggle",
+            ))
+        if not bindings:
             raise HotkeyError(
                 "没有配置任何热键。请在 ~/Utter/config.json 里设 hotkey_push 或 "
                 "hotkey_toggle；用 `utter keys` 找一个没被别的 app 占用的键。"
             )
-        return _HotkeyGroup(listeners)
+        # One listener, both bindings. See HotkeyListener's docstring: a second
+        # listener plus the injector's Controller aborts the process.
+        return HotkeyListener(on_event=on_event, bindings=bindings)
 
     # -- lifecycle --
 
     def start(self) -> "DictationDaemon":
+        # Build the keyboard Controller before any listener thread exists.
+        # Both touch macOS's non-reentrant keycode_context, and doing it in this
+        # order means they never contend.
+        warm = getattr(getattr(self.injector, "keyboard", None), "warm_up", None)
+        if warm is not None:
+            try:
+                warm()
+            except Exception:  # pragma: no cover - defensive
+                log.warning("could not pre-build the keyboard controller", exc_info=True)
+
         self.hotkey = self.hotkey_factory(self._on_hotkey)
         self.hotkey.start()  # raises HotkeyError without Accessibility
 
@@ -146,6 +133,7 @@ class DictationDaemon:
         self._worker.start()
 
         self._warm_up()
+        self._warm_up_audio()
         self.running = True
         return self
 
@@ -191,6 +179,31 @@ class DictationDaemon:
             log.info("model warmed in %.2fs", time.perf_counter() - started)
         except Exception:
             log.warning("model warm-up failed; the first utterance will be slow", exc_info=True)
+
+    def _warm_up_audio(self) -> None:
+        """Open and close a stream once, so the first real one is not slow.
+
+        Measured 2026-08-10: the first MicSource of a process takes 713ms from
+        start() to the first chunk of audio; every one after takes ~220ms. That
+        difference is CoreAudio initialising, and it is charged to whatever the
+        author says first — the opening of their first sentence, silently
+        missing.
+
+        ~220ms of clipping remains on every dictation. Fixing that needs the
+        stream held permanently open with a rolling pre-roll buffer, which
+        lights the microphone indicator for as long as the daemon runs. That is
+        a privacy trade the author should make deliberately, not one to slip in.
+        """
+        try:
+            started = time.perf_counter()
+            mic = self.make_mic()
+            mic.start()
+            time.sleep(0.15)
+            list(mic.chunks())
+            mic.stop()
+            log.info("audio warmed in %.2fs", time.perf_counter() - started)
+        except Exception:
+            log.warning("audio warm-up failed", exc_info=True)
 
     # -- hotkey --
 
