@@ -38,8 +38,16 @@ CHUNK_SAMPLES = 1600  # 100 ms
 # author got back only the tail of what they had said, with no indication that
 # anything was missing. Reported 2026-08-10.
 #
-# 35 seconds: the 30s hard ceiling from design §5.4, plus margin.
-MAX_CHUNKS = 350
+# Five minutes. The first attempt at this fix used 35 seconds — design §5.4's
+# VAD force-cut ceiling plus margin — which was the wrong number copied from the
+# wrong mode. That ceiling exists so LISTEN mode cannot buffer a speaker who
+# never pauses. In push-to-talk the length is decided by the author's finger,
+# and they hit 35 seconds on their second real attempt.
+#
+# There was never a reason to be frugal: a chunk is 1600 float32 samples, so
+# five minutes of audio is 19 MB. Memory was not the constraint; an unexamined
+# constant was.
+MAX_CHUNKS = 3000
 
 
 class AudioSourceError(RuntimeError):

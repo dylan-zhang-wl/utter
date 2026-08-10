@@ -89,9 +89,10 @@ class DictationDaemon:
         if self.make_mic is None:
             self.make_mic = lambda: MicSource(
                 device_index=self.config.input_device,
-                # The queue is the recording in push-to-talk; it has to hold a
-                # whole utterance, not just smooth over a stall.
-                max_chunks=int(self.config.max_utterance_sec * 10) + 50,
+                # Deliberately NOT derived from max_utterance_sec: that ceiling
+                # governs the VAD's force-cut in listen mode, and using it here
+                # capped push-to-talk at 35 seconds. The author's finger decides
+                # how long an utterance is; 19 MB buys five minutes of it.
             )
         if self.hotkey_factory is None:
             self.hotkey_factory = self._default_hotkeys

@@ -276,16 +276,30 @@ def test_stop_without_start_is_harmless():
     audio_source.MicSource().stop()
 
 
-def test_buffer_holds_a_whole_utterance():
+def test_buffer_holds_a_long_utterance():
     """The queue IS the recording in push-to-talk — nothing drains it until the
-    key comes up. At the original 100 chunks it silently discarded everything
-    past ten seconds and returned only the tail. Reported 2026-08-10."""
-    assert audio_source.MAX_CHUNKS * audio_source.CHUNK_SAMPLES / audio_source.SAMPLE_RATE >= 30
+    key comes up.
+
+    Sized twice, wrongly both times before this. 100 chunks capped every
+    dictation at ten seconds; 350 capped it at 35, a number copied from the VAD
+    force-cut ceiling that governs a different mode entirely, and the author hit
+    it on their second real attempt. Five minutes of audio is 19 MB — memory was
+    never the constraint here.
+    """
+    seconds = audio_source.MAX_CHUNKS * audio_source.CHUNK_SAMPLES / audio_source.SAMPLE_RATE
+    assert seconds >= 300
+
+
+def test_the_buffer_costs_little_memory():
+    """The reason the cap can be generous. If this ever fails, the tradeoff that
+    justified a five-minute buffer has changed and needs rethinking."""
+    megabytes = audio_source.MAX_CHUNKS * audio_source.CHUNK_SAMPLES * 4 / 1e6
+    assert megabytes < 32
 
 
 def test_nothing_is_dropped_within_the_utterance_ceiling():
     with audio_source.MicSource() as source:
-        for _ in range(300):  # 30 seconds at 100ms per chunk
+        for _ in range(600):  # 60 seconds at 100ms per chunk
             FakeStream.instances[0].deliver(mono())
 
         assert source.dropped == 0
