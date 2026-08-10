@@ -128,6 +128,51 @@ def _activate(pid: int) -> None:
         log.warning("could not activate pid %s", pid, exc_info=True)
 
 
+# Roles that accept typed text. Read from the frontmost application before
+# pasting, the way VoiceInk does — ⌘V sent at a window with no focused text
+# field is discarded by the system, and we would report success for text that
+# went nowhere. The author watched exactly that happen.
+#
+# Reading AXRole is not what 铁律 13 forbids. That rule rejects *writing*
+# AXValue to place text in a background window, which fails silently on
+# Electron and browsers. Asking what has focus is a read, it is what the
+# Accessibility API is for, and an unknown answer here means "go ahead" rather
+# than "refuse" — see below.
+_EDITABLE_ROLES = {"AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"}
+
+
+def _focused_role() -> str | None:
+    """AXRole of whatever currently has keyboard focus, or None if unknowable."""
+    try:
+        from ApplicationServices import (
+            AXUIElementCopyAttributeValue,
+            AXUIElementCreateSystemWide,
+        )
+
+        system = AXUIElementCreateSystemWide()
+        err, focused = AXUIElementCopyAttributeValue(system, "AXFocusedUIElement", None)
+        if err or focused is None:
+            return None
+        err, role = AXUIElementCopyAttributeValue(focused, "AXRole", None)
+        return None if err else str(role)
+    except Exception:
+        return None
+
+
+def _can_accept_text() -> bool | None:
+    """True / False / None when the application does not expose its focus.
+
+    None is deliberately not False. Electron apps, web views and terminals
+    frequently report nothing useful, and refusing to paste into them would
+    break most of what the author writes in. Unknown means proceed; only a
+    definite non-editable role stops us.
+    """
+    role = _focused_role()
+    if role is None:
+        return None
+    return role in _EDITABLE_ROLES
+
+
 def _notify(title: str, body: str) -> None:
     """A user-visible notification. Never raises — this is the *fallback* path,
     and a fallback that can fail is not one."""
@@ -310,6 +355,17 @@ class Injector:
     # -- internals --
 
     def _paste(self, text: str) -> InjectionResult:
+        if _can_accept_text() is False:
+            # ⌘V at a window with nothing focused is swallowed by the system.
+            # Reporting success for that is the silent loss this project spends
+            # most of its rules avoiding, so say so and keep the text.
+            self._buffer.append(text)
+            _notify("Utter", "当前窗口没有可输入的位置，文字已保留，切到输入框后会自动落下")
+            return InjectionResult(
+                injected=False, buffered=True,
+                reason="当前窗口没有获得焦点的输入框（⌘V 会被系统丢弃）",
+            )
+
         saved = None
         try:
             saved = self.pasteboard.snapshot()

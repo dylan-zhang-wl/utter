@@ -417,3 +417,48 @@ def test_activation_wait_gives_up_rather_than_hanging(monkeypatch):
     monkeypatch.setattr(injection, "_frontmost", lambda: injection.Target(pid=999, name="Other"))
 
     assert injection._activate_and_wait(100, timeout=0.2) is False
+
+
+# --- AXRole check, adopted from VoiceInk (2026-08-10) ------------------------
+
+
+def test_refuses_to_paste_when_nothing_can_accept_text(rig, monkeypatch):
+    """⌘V at a window with no focused text field is swallowed by the system.
+    Reporting success for that is silent loss — the author watched text vanish
+    while the log said it had been injected."""
+    injector, board, keys, state = rig
+    monkeypatch.setattr(injection, "_can_accept_text", lambda: False)
+    injector.lock_target()
+    result = injector.inject(0, "text")
+
+    assert keys.pastes == 0
+    assert result.buffered is True
+    assert injector.pending == 1
+    assert state["notes"], "the user must be told, not left guessing"
+
+
+def test_pastes_when_a_text_field_is_focused(rig, monkeypatch):
+    injector, board, keys, _ = rig
+    monkeypatch.setattr(injection, "_can_accept_text", lambda: True)
+    injector.lock_target()
+
+    assert injector.inject(0, "text").injected is True
+
+
+def test_an_unknown_focus_still_pastes(rig, monkeypatch):
+    """Electron apps, web views and terminals often expose nothing useful.
+    Refusing there would break most of what the author writes in, so unknown
+    means proceed — only a definite non-editable role stops us."""
+    injector, board, keys, _ = rig
+    monkeypatch.setattr(injection, "_can_accept_text", lambda: None)
+    injector.lock_target()
+
+    assert injector.inject(0, "text").injected is True
+
+
+def test_reading_a_role_is_not_writing_a_value():
+    """铁律 13 rejects writing AXValue into a background window. Reading what
+    has focus is a different operation and the API's actual purpose."""
+    source = open(injection.__file__).read()
+    assert "AXUIElementSetAttributeValue" not in source
+    assert "AXUIElementCopyAttributeValue" in source

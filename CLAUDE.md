@@ -46,6 +46,19 @@
 12. **长文本走剪贴板粘贴，不逐字模拟键盘。** 粘贴前备份用户原剪贴板，粘完还原。
 13. **焦点离开目标窗口时缓冲，不强行注入。** 禁用 `CGEventPostToPid` 与辅助功能直改文本框值这两条路——它们在 Electron／浏览器／终端上随机失败，而**随机失败比明确失败更糟**：用户不会知道哪一段丢了。
 
+## 借鉴来源
+
+同类开源项目是这个领域的已知坑清单，遇到问题先查（全局规则 §八）。已确认可参考：
+
+| 项目 | 已验证的做法 |
+|---|---|
+| [VoiceInk](https://github.com/Beingpax/VoiceInk) | 粘贴前查 `AXRole` 确认有输入框；剪贴板还原延迟**可配置**；type-out 作兜底；按 app 切配置 |
+| [Handy](https://github.com/primaprashant/awesome-voice-typing) | 跨平台（Windows 参考） |
+| openai/whisper [#976](https://github.com/openai/whisper/discussions/976) | code-switching 是设计限制：每 30s 窗口只认一个语言 |
+| openai/whisper [#277](https://github.com/openai/whisper/discussions/277) | 繁简输出不稳定，已知问题 |
+
+**但查开源不替代自己测量。** VoiceInk [#687](https://github.com/Beingpax/VoiceInk/issues/687) 至今开着的那个「间歇性空转录」，正是本项目量出来并修掉的首次开麦 713ms —— 他们复现不了，因为没埋点。
+
 ## 环境
 
 - 开发机 Apple M2 / 16G。模型 `mlx-community/whisper-large-v3-turbo` 已在 `~/.cache/huggingface/`（1.6G），**不要重复下载**。
