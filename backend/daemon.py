@@ -34,6 +34,7 @@ from backend.config import AppConfig
 from backend.hotkey import HotkeyError, HotkeyEvent, HotkeyListener
 from backend.injection import Injector
 from backend.pipeline import Utterance
+from backend.punctuation import collapse_repetition
 from backend.punctuation import normalise as normalise_punctuation
 from backend.scratchpad import Scratchpad, SessionArchive
 from backend.timing import Stopwatch
@@ -160,6 +161,15 @@ class DictationDaemon:
             self._worker.join(timeout=5)
             self._worker = None
 
+        # Anything still held has to go somewhere. flush() falls back to the
+        # clipboard with a notification when the target is gone, so quitting
+        # never silently discards words the author said.
+        try:
+            if getattr(self.injector, "pending", 0):
+                self.injector.flush()
+        except Exception:  # pragma: no cover
+            log.warning("could not flush on shutdown", exc_info=True)
+
         self.injector.release()
         self.running = False
 
@@ -275,6 +285,11 @@ class DictationDaemon:
                 job = self._queue.get(timeout=0.1)
             except queue.Empty:
                 self._idle.set()
+                # Design §4.1e promised text buffered during a focus change
+                # would land when the author came back. Injector.flush() existed
+                # and was tested; nothing ever called it, so buffered text sat
+                # there forever. This is that call.
+                self._flush_if_back()
                 continue
             try:
                 self._process(job)
@@ -284,6 +299,24 @@ class DictationDaemon:
                 self._queue.task_done()
                 if self._queue.empty():
                     self._idle.set()
+
+    def _flush_if_back(self) -> None:
+        """Deliver anything held, once the target window is frontmost again."""
+        if getattr(self.injector, "pending", 0) < 1:
+            return
+        target = getattr(self.injector, "target", None)
+        if target is None:
+            return
+        from backend.injection import _frontmost
+
+        try:
+            front = _frontmost()
+            if front is not None and front.pid == target.pid:
+                result = self.injector.flush()
+                if result.injected:
+                    log.info("flushed buffered dictation into %s", target.name)
+        except Exception:  # pragma: no cover - the worker must survive this
+            log.warning("could not flush buffered dictation", exc_info=True)
 
     def _process(self, job: _Job) -> None:
         watch = Stopwatch(
@@ -325,7 +358,16 @@ class DictationDaemon:
         # width of punctuation changes, never a word. Whisper does not hold one
         # punctuation style across a code-switch, so a bilingual sentence comes
         # back with Chinese commas after English clauses.
-        raw = normalise_punctuation((raw or "").strip())
+        raw, repeats = collapse_repetition(normalise_punctuation((raw or "").strip()))
+        if repeats:
+            # The bounded temperature ladder is supposed to escape these, and on
+            # 2026-08-10 it did not: 13.4s of speech came back as 「英文是，」
+            # forty times. Injecting that into the author's document is worse
+            # than any latency problem, so there is a deterministic net under
+            # the model. Loud, never silent — the author must know the model
+            # degenerated rather than believe they said this.
+            log.warning("collapsed %d repetitions in utterance %d", repeats, job.index)
+            watch.note_repetition(repeats)
         if not raw:
             self.last_timing = watch
             return
@@ -352,7 +394,7 @@ class DictationDaemon:
         self.scratchpad.add(utterance)
 
         if self.config.dictate_target == "cursor":
-            with watch.span("clipboard + paste"):
+            with watch.span("注入（写剪贴板→⌘V→还原）"):
                 result = self.injector.inject(job.index, text)
             # Whether the text landed, and where, was invisible until now — the
             # report showed a duration for an injection that may never have

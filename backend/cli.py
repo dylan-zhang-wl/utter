@@ -337,6 +337,39 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
     return 0
 
 
+def cmd_sessions(args, out) -> int:
+    """Read back what was dictated. The archive existed from day one but there
+    was no way to look at it without knowing the file layout."""
+    import json
+
+    from backend.config import DEFAULT_DIR
+
+    folder = DEFAULT_DIR / "sessions"
+    files = sorted(folder.glob("session_*.jsonl"), reverse=True)
+    if not files:
+        print(f"还没有存档（会写到 {folder}）", file=out)
+        return 0
+
+    if args.list:
+        for path in files[: args.limit]:
+            lines = sum(1 for _ in path.open())
+            print(f"  {path.stem[8:]}  {lines} 段  {path}", file=out)
+        return 0
+
+    path = files[0]
+    print(f"{path}\n", file=out)
+    for line in path.open():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # a crash mid-write costs one line, not the file
+        print(f"[{record['index']}] {record['text']}", file=out)
+        if record.get("polished") and record["raw_text"] != record["text"]:
+            # 铁律 10's audit trail is only useful if it can be read.
+            print(f"    原文: {record['raw_text']}", file=out)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="utter", description="Utter — local-first speech")
     sub = parser.add_subparsers(dest="command")
@@ -351,6 +384,10 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--mode", choices=["listen", "dictate"], default="listen")
     transcribe.add_argument("--language", default=None)
     transcribe.add_argument("--timing", action="store_true", help="report per-utterance latency")
+
+    sessions = sub.add_parser("sessions", help="read back what was dictated")
+    sessions.add_argument("--list", action="store_true", help="list sessions instead of printing the latest")
+    sessions.add_argument("--limit", type=int, default=10)
 
     keys = sub.add_parser("keys", help="find a hotkey nothing else has claimed")
     keys.add_argument("--seconds", type=float, default=60.0)
@@ -377,6 +414,8 @@ def main(argv=None, stdout=None, **overrides) -> int:
         return cmd_models(args, out)
     if args.command == "transcribe":
         return cmd_transcribe(args, out, **overrides)
+    if args.command == "sessions":
+        return cmd_sessions(args, out)
     if args.command == "keys":
         from backend import keyprobe
 

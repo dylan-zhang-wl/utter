@@ -625,3 +625,64 @@ def test_warm_up_runs_on_a_dedicated_input(monkeypatch):
 
     assert mic.started >= 1
     d.stop()
+
+
+# --- flushing buffered text (the call that was missing) ----------------------
+
+
+class BufferingInjector(FakeInjector):
+    """Behaves like the real one when focus has moved: holds instead of injecting."""
+
+    def __init__(self, blocked=True):
+        super().__init__()
+        self.blocked = blocked
+        self.flushed = []
+
+    def inject(self, index, text):
+        if self.blocked:
+            self.pending += 1
+            return InjectionResult(injected=False, buffered=True, reason="focus moved")
+        return super().inject(index, text)
+
+    def flush(self):
+        if not self.pending:
+            return InjectionResult(injected=False, reason="nothing pending")
+        self.flushed.append(self.pending)
+        self.pending = 0
+        return InjectionResult(injected=True)
+
+
+def test_buffered_text_is_flushed_when_the_target_returns(monkeypatch):
+    """Design §4.1e promised this. Injector.flush() existed and was tested;
+    nothing called it, so text buffered during a focus change sat there
+    forever."""
+    from backend import injection
+
+    injector = BufferingInjector()
+    # The target is frontmost again — which is the condition the worker checks.
+    monkeypatch.setattr(injection, "_frontmost", lambda: Target(pid=1, name="TestApp"))
+
+    d = build(injector=injector)
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    import time as _t
+    _t.sleep(0.5)  # the worker checks on each idle tick
+
+    assert injector.flushed, "the worker should have flushed on returning"
+    d.stop()
+
+
+def test_shutdown_flushes_rather_than_discarding():
+    """Quitting must not silently drop words the author already said."""
+    injector = BufferingInjector()
+    d = build(injector=injector)
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+    d.stop()
+
+    assert injector.flushed, "pending text must go somewhere on shutdown"

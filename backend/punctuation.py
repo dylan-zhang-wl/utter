@@ -91,3 +91,36 @@ def _space_after_narrow(text: str) -> str:
         out.append(" ")
 
     return "".join(out)
+
+
+def collapse_repetition(text: str, threshold: int = 4) -> tuple[str, int]:
+    """Collapse a degenerate repetition loop. Returns (text, how many removed).
+
+    Whisper sometimes falls into repeating one short phrase until the window
+    ends. The temperature ladder exists to escape that and does not always
+    manage it — measured 2026-08-10, 13.4 seconds of speech came back as
+    「英文是，」 forty times.
+
+    This is not editing the author's words: they did not say it forty times.
+    Anything collapsed here is reported, never removed quietly, because a
+    transcript that silently drops repetitions would hide a failing model.
+    """
+    if not text:
+        return text, 0
+
+    import re
+
+    removed = 0
+    # Two or more characters repeated many times over — long enough not to catch
+    # a real 「好好」 or 「哈哈哈」, short enough to catch a decoder loop.
+    pattern = re.compile(r"(.{2,30}?)\1{%d,}" % (threshold - 1))
+    while True:
+        match = pattern.search(text)
+        if not match:
+            break
+        unit = match.group(1)
+        count = len(match.group(0)) // len(unit)
+        removed += count - 1
+        text = text[: match.start()] + unit + text[match.end() :]
+
+    return text, removed

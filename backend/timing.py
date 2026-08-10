@@ -33,6 +33,7 @@ class Stopwatch:
     dropped_chunks: int = 0
     audio_seconds: float | None = None
     target_note: str | None = None
+    repetition_note: str | None = None
     target_ms: float | None = None
     stages: list[Stage] = field(default_factory=list)
 
@@ -57,6 +58,12 @@ class Stopwatch:
     def note_target(self, name: str, failed: str = "") -> None:
         """Record where the text was sent, and whether it arrived."""
         self.target_note = f"注入 → {name}" if not failed else f"⚠ 未注入 → {name}：{failed}"
+
+    def note_repetition(self, removed: int) -> None:
+        self.repetition_note = (
+            f"⚠ 模型复读了，已折叠 {removed} 处重复。"
+            "这段建议重说一遍——原始输出在存档里"
+        )
 
     def mark(self, name: str, ms: float) -> None:
         """Record a stage measured elsewhere — the hotkey gap, for instance,
@@ -113,6 +120,9 @@ class Stopwatch:
 
         if self.target_note:
             lines.append(f"  {self.target_note}")
+
+        if self.repetition_note:
+            lines.append(f"  {self.repetition_note}")
 
         if self.dropped_chunks:
             lost = self.dropped_chunks / 10

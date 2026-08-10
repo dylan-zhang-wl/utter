@@ -64,3 +64,35 @@ def test_decimals_are_not_broken_up():
     """3.14 and 1,000 are numbers, not sentences."""
     assert normalise("误差 3.14 以内") == "误差 3.14 以内"
     assert normalise("共 1,000 条") == "共 1,000 条"
+
+
+# --- repetition collapse (a real loop, 2026-08-10) ---------------------------
+
+
+from backend.punctuation import collapse_repetition
+
+
+def test_collapses_a_decoder_loop():
+    """13.4 seconds of speech came back as 「英文是，」 forty times."""
+    text, removed = collapse_repetition("好像没有英文呢。" + "英文是， " * 40)
+    assert text.count("英文是") == 1
+    assert removed == 39
+
+
+def test_leaves_normal_text_alone():
+    source = "多模态语篇的符号资源具有不同的意义潜势，这一点很重要。"
+    assert collapse_repetition(source) == (source, 0)
+
+
+def test_does_not_touch_a_real_short_repeat():
+    """哈哈哈 and 好好好 are things people say."""
+    assert collapse_repetition("他说哈哈哈然后就走了")[1] == 0
+
+
+def test_reports_how_much_was_removed():
+    _, removed = collapse_repetition("of the model sign " * 30)
+    assert removed >= 20
+
+
+def test_empty_is_safe():
+    assert collapse_repetition("") == ("", 0)
