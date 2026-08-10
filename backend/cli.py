@@ -318,7 +318,15 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
         if args.timing and daemon.last_timing is not None:
             print(daemon.last_timing.report(), file=out)
 
-    daemon = DictationDaemon(config=config, stt=stt, polish=polish, on_text=show)
+    overlay = None
+    if not args.no_ui:
+        from backend.overlay import Overlay
+
+        overlay = Overlay()
+
+    daemon = DictationDaemon(
+        config=config, stt=stt, polish=polish, on_text=show, overlay=overlay
+    )
 
     where = "光标处" if config.dictate_target == "cursor" else "暂存区（不注入）"
     toggle_label = (
@@ -334,6 +342,7 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
         f"  输出   {where}\n"
         f"  模型   {getattr(stt, 'display_name', stt)}\n"
         f"  润色   {'开（' + config.polish_level + '）' if config.polish_enabled else '关'}\n"
+        f"  界面   {'浮窗 + 菜单栏' if not args.no_ui else '无（--no-ui）'}\n"
         f"  语言   {config.dictate_language or '自动检测'}"
         f"{'   ⚠ 自动检测每句多花约 0.9 秒；在 ~/Utter/config.json 里设 dictate_language 可省下' if not config.dictate_language else ''}\n"
         f"\n预热模型中…",
@@ -348,7 +357,10 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
 
     print("就绪。按住热键说话，Ctrl-C 退出。\n", file=out)
     try:
-        daemon.run_forever()
+        if args.no_ui:
+            daemon.run_forever()
+        else:
+            _run_with_ui(daemon)
     except KeyboardInterrupt:
         pass
     finally:
@@ -446,6 +458,38 @@ def cmd_mics(args, out) -> int:
     return 0 if working else 1
 
 
+def _run_with_ui(daemon) -> None:  # pragma: no cover - interactive
+    """Hand the main thread to AppKit and let the daemon work underneath it.
+
+    AppKit insists on the main thread, and so does its run loop, so the shell
+    cannot be a side car to the sleep loop — it has to *be* the loop. The
+    daemon's own work already lives on background threads, so nothing moves.
+
+    NSApplicationActivationPolicyAccessory keeps Utter out of the Dock and out
+    of ⌘Tab: it is a menu-bar tool, and a Dock icon for something you never
+    switch to is clutter.
+    """
+    import signal
+
+    import AppKit
+
+    from backend.menubar import MenuBar
+
+    app = AppKit.NSApplication.sharedApplication()
+    app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+
+    menu = MenuBar(daemon, on_quit=daemon.stop)
+    menu.install()
+
+    # Ctrl-C would otherwise be swallowed by the AppKit run loop.
+    signal.signal(signal.SIGINT, lambda *_: app.terminate_(None))
+    AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+        0.3, True, lambda _t: None
+    )
+
+    app.run()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="utter", description="Utter — local-first speech")
     sub = parser.add_subparsers(dest="command")
@@ -474,6 +518,8 @@ def build_parser() -> argparse.ArgumentParser:
     dictate = sub.add_parser("dictate", help="run the resident dictation daemon")
     dictate.add_argument("--target", choices=["cursor", "scratchpad"], default=None)
     dictate.add_argument("--mode", choices=["push", "toggle"], default=None)
+    dictate.add_argument("--no-ui", action="store_true",
+                         help="不显示浮窗和菜单栏，纯终端运行")
     dictate.add_argument("--timing", action="store_true", help="print a latency breakdown per utterance")
 
     return parser

@@ -128,6 +128,10 @@ class MicSource:
         self._stream = None
         self.dropped = 0
         self.overflows = 0
+        #: Newest chunk, for the level meter. A *copy* of what went into the
+        #: queue — reading the queue to drive a display would consume audio the
+        #: transcription needs.
+        self.last_chunk = None
         self.stopped_reason: str | None = None
 
     # -- lifecycle --
@@ -194,6 +198,8 @@ class MicSource:
         audio = np.asarray(frames, dtype=np.float32)
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
+
+        self.last_chunk = audio
 
         try:
             self._queue.put_nowait(audio)

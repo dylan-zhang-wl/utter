@@ -81,6 +81,9 @@ class DictationDaemon:
     on_text: Callable[[Utterance], None] | None = None
     speech_check: Callable[[np.ndarray], bool] | None = None
     """Overridable so tests can drive the wiring without a real VAD session."""
+    overlay: object | None = None
+    """The floating indicator, or None to run headless. Optional on purpose:
+    the daemon must keep working when there is no window server at all."""
 
     scratchpad: Scratchpad = field(init=False)
     hotkey: object = field(init=False, default=None)
@@ -96,6 +99,7 @@ class DictationDaemon:
     _idle: threading.Event = field(init=False, default_factory=threading.Event)
     _vad: object | None = field(init=False, default=None)
     _locked_at_press: str | None = field(init=False, default=None)
+    _level_stop: threading.Event = field(init=False, default_factory=threading.Event)
 
     def __post_init__(self):
         if self.injector is None:
@@ -268,6 +272,12 @@ class DictationDaemon:
         self._locked_at_press = getattr(locked, "name", None)
         log.info("press: locked target = %s", self._locked_at_press)
 
+        if self.overlay is not None:
+            self.overlay.show("recording")
+            self._level_stop = threading.Event()
+            threading.Thread(target=self._pump_levels, daemon=True,
+                             name="utter-levels").start()
+
         try:
             self._mic = self.make_mic().start()
         except Exception as exc:
@@ -302,7 +312,29 @@ class DictationDaemon:
             self._idle.clear()
             self._queue.put(job)
 
+        if self.overlay is not None:
+            self._level_stop.set()
+            self.overlay.set_state("working", "转录中")
+
         threading.Thread(target=mic.stop, daemon=True, name="utter-mic-close").start()
+
+    def _pump_levels(self) -> None:
+        """Drive the overlay at ~25fps while the key is held.
+
+        Reads the level off a copy of the newest chunk rather than consuming the
+        queue — the queue IS the recording, and taking chunks out of it here
+        would silently shorten what gets transcribed.
+        """
+        from backend.overlay import rms_to_level
+
+        started = time.perf_counter()
+        while not self._level_stop.is_set():
+            mic = self._mic
+            chunk = getattr(mic, "last_chunk", None) if mic is not None else None
+            self.overlay.feed(
+                rms_to_level(chunk), f"{time.perf_counter() - started:.1f}s"
+            )
+            time.sleep(0.04)
 
     # -- the worker --
 
@@ -364,6 +396,9 @@ class DictationDaemon:
         if not speaking:
             log.info("utterance %d contained no speech, discarded", job.index)
             watch.skip("transcription", "no speech")
+            if self.overlay is not None:
+                self.overlay.set_state("error", "没听到")
+                threading.Timer(1.2, self.overlay.hide).start()
             self.last_timing = watch
             return
 
@@ -446,6 +481,9 @@ class DictationDaemon:
                 self.on_text(utterance)
             except Exception:  # pragma: no cover
                 log.warning("on_text callback failed", exc_info=True)
+
+        if self.overlay is not None:
+            self.overlay.hide()
 
         self.last_timing = watch
         if watch.over_target:
