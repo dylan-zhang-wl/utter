@@ -182,3 +182,25 @@ if decode_result.compression_ratio > compression_ratio_threshold:
 
 > 这条本该一开始就想到：**铁律 2 就是从同一组数字写出来的**，它判过 v2 的死刑。
 > 我却在两天后自己违反了它。规则写下来还不够，动手前得回头看一眼。
+
+## 三方对比（2026-08-10，作者真实口述，中英混说）
+
+素材：同一段话，中文为主，嵌 antigravity / literature review / literature matrix 等术语。
+
+| 配置 | 中文 | 英文术语 | 标点 | 速度 |
+|---|---|---|---|---|
+| Whisper turbo · `zh` | 准 | **被翻译成中文** | 少 | ~1.2s |
+| **Whisper turbo · 自动** | 准 | **✅ 正确** | **✅ 有** | ~2.1s |
+| **SenseVoice** | **准，且有标点** | **❌ 很差** | ✅ 有 | **极快（~0.1–0.5s）** |
+
+SenseVoice 把 antigravity 听成「安 gravity」、2.1 literature review 听成「to point one review」、
+literature matrix 听成「总结这个 matrix」。**中文那一半明显优于 Whisper，英文那一半明显差于它。**
+
+它还没有 prompt 通道，所以设计 §4.1g 第一层的术语表在它上面完全失效——**而作者的英文恰恰
+几乎全是术语**，这让它的英文短板雪上加霜。
+
+**结论：Whisper turbo + 自动检测胜出。** 那多花的 0.9 秒买到的是「两种语言都不被翻译」，
+对一个中英混说的学术使用者来说是必要开销，不是浪费。
+
+SenseVoice 留在 provider 列表里，菜单可随时切——它在纯中文场景下（快 4–12 倍、标点更好）
+仍然是有价值的选项，只是不适合作默认。

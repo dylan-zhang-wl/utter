@@ -784,3 +784,68 @@ def test_switching_to_an_unavailable_provider_keeps_the_old_one(monkeypatch):
     assert ok is False and "不可用" in message
     assert d.stt is original, "a failed switch must not leave the daemon engineless"
     d.stop()
+
+
+class SpyOverlay:
+    def __init__(self):
+        self.states, self.hides = [], 0
+
+    def show(self, state="recording"):
+        self.states.append(state)
+
+    def set_state(self, state, caption=""):
+        self.states.append(state)
+
+    def feed(self, level, caption=""):
+        pass
+
+    def hide(self):
+        self.hides += 1
+
+
+def test_the_overlay_is_hidden_after_a_failed_transcription():
+    """It returned early and left the panel stuck on 「转录中」 with the bars
+    frozen — worse than no overlay, because it reports work that is not
+    happening."""
+    overlay = SpyOverlay()
+    d = build(stt=FakeStt(fail=True), overlay=overlay)
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    assert overlay.hides >= 1
+    d.stop()
+
+
+def test_the_overlay_is_hidden_after_an_empty_transcript():
+    overlay = SpyOverlay()
+    d = build(stt=FakeStt(texts=["   "]), overlay=overlay)
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    assert overlay.hides >= 1
+    d.stop()
+
+
+def test_each_dictation_stops_the_previous_level_pump():
+    """The stop event was replaced rather than set, so the old thread went on
+    polling the new one — unset — and never exited. One leaked thread per
+    dictation, all drawing to the same panel."""
+    import threading as th
+
+    overlay = SpyOverlay()
+    d = build(overlay=overlay)
+    d.start()
+    before = th.active_count()
+    for _ in range(5):
+        d.begin_utterance()
+        d.end_utterance()
+        d.wait_idle()
+
+    import time as _t
+    _t.sleep(0.3)
+    assert th.active_count() <= before + 1, "level pumps are piling up"
+    d.stop()

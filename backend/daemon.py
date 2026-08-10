@@ -342,8 +342,14 @@ class DictationDaemon:
 
         if self.overlay is not None:
             self.overlay.show("recording")
-            self._level_stop = threading.Event()
-            threading.Thread(target=self._pump_levels, daemon=True,
+            # Stop whatever pump is still running before starting another.
+            # The event was being *replaced* rather than set, so the previous
+            # thread went on to poll the new one — which was unset — and never
+            # exited. One leaked thread per dictation, all drawing to the same
+            # panel.
+            self._level_stop.set()
+            stop = self._level_stop = threading.Event()
+            threading.Thread(target=self._pump_levels, args=(stop,), daemon=True,
                              name="utter-levels").start()
 
         try:
@@ -386,7 +392,7 @@ class DictationDaemon:
 
         threading.Thread(target=mic.stop, daemon=True, name="utter-mic-close").start()
 
-    def _pump_levels(self) -> None:
+    def _pump_levels(self, stop: threading.Event) -> None:
         """Drive the overlay at ~25fps while the key is held.
 
         Reads the level off a copy of the newest chunk rather than consuming the
@@ -396,7 +402,8 @@ class DictationDaemon:
         from backend.overlay import rms_to_level
 
         started = time.perf_counter()
-        while not self._level_stop.is_set():
+        # The event is passed in, not read off self — see begin_utterance.
+        while not stop.is_set():
             mic = self._mic
             chunk = getattr(mic, "last_chunk", None) if mic is not None else None
             self.overlay.feed(
@@ -446,6 +453,17 @@ class DictationDaemon:
             log.warning("could not flush buffered dictation", exc_info=True)
 
     def _process(self, job: _Job) -> None:
+        try:
+            self._process_inner(job)
+        finally:
+            # Every exit path, not just the happy one. Transcription failure and
+            # an empty transcript both returned early, leaving the panel stuck
+            # on 「转录中」 with the bars frozen — which is worse than no overlay
+            # at all, because it reports work that is not happening.
+            if self.overlay is not None:
+                self.overlay.hide()
+
+    def _process_inner(self, job: _Job) -> None:
         watch = Stopwatch(
             target_ms=TARGET_MS_WITH_POLISH if self._polishing else TARGET_MS_WITHOUT_POLISH,
             dropped_chunks=job.dropped,
@@ -466,7 +484,7 @@ class DictationDaemon:
             watch.skip("transcription", "no speech")
             if self.overlay is not None:
                 self.overlay.set_state("error", "没听到")
-                threading.Timer(1.2, self.overlay.hide).start()
+                time.sleep(0.9)  # let the author see it before the finally hides it
             self.last_timing = watch
             return
 
@@ -549,9 +567,6 @@ class DictationDaemon:
                 self.on_text(utterance)
             except Exception:  # pragma: no cover
                 log.warning("on_text callback failed", exc_info=True)
-
-        if self.overlay is not None:
-            self.overlay.hide()
 
         self.last_timing = watch
         if watch.over_target:
