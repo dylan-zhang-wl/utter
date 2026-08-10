@@ -698,3 +698,63 @@ def test_shutdown_flushes_rather_than_discarding():
     d.stop()
 
     assert injector.flushed, "pending text must go somewhere on shutdown"
+
+
+class LongMic(FakeMic):
+    def __init__(self, seconds):
+        super().__init__(seconds=seconds)
+
+
+def test_a_long_hold_is_split_at_pauses(monkeypatch):
+    """65 seconds of unbroken speech came back as one run-on sentence with a
+    single full stop. Whisper punctuates what it can see the shape of; handed
+    one undifferentiated block it has nothing to go on."""
+    stt = FakeStt(texts=["第一句。", "第二句。", "第三句。"])
+    d = build(stt=stt, mic=LongMic(30.0))
+    monkeypatch.setattr(
+        d, "_split_at_pauses",
+        lambda audio: [audio[:16000], audio[16000:32000], audio[32000:48000]],
+    )
+    d.start()
+    before = len(stt.calls)
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    assert len(stt.calls) - before == 3, "one model pass per clause"
+    # FakeStt cycles its texts and the warm-up consumed one, so assert the
+    # pieces were joined rather than pinning an order the fake decides.
+    text = d.scratchpad.entries[0].text
+    assert all(piece in text for piece in ("第一句。", "第二句。", "第三句。"))
+    d.stop()
+
+
+def test_a_short_hold_is_not_split():
+    """Below the threshold Whisper's own windowing copes, and each extra cut
+    costs another model pass."""
+    stt = FakeStt()
+    d = build(stt=stt, mic=FakeMic(seconds=3.0))
+    d.start()
+    before = len(stt.calls)
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    assert len(stt.calls) - before == 1
+    d.stop()
+
+
+def test_a_failed_split_falls_back_to_one_pass(monkeypatch):
+    """A broken VAD must cost punctuation quality, never the transcript."""
+    stt = FakeStt()
+    d = build(stt=stt, mic=LongMic(30.0))
+    monkeypatch.setattr(d, "_split_at_pauses", lambda audio: [])
+    d.start()
+    before = len(stt.calls)
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    assert len(stt.calls) - before == 1
+    assert d.scratchpad.entries[0].text
+    d.stop()

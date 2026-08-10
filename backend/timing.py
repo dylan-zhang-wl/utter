@@ -34,6 +34,7 @@ class Stopwatch:
     audio_seconds: float | None = None
     target_note: str | None = None
     repetition_note: str | None = None
+    segments_note: str | None = None
     target_ms: float | None = None
     stages: list[Stage] = field(default_factory=list)
 
@@ -75,6 +76,9 @@ class Stopwatch:
             f"注入前前台 {before or '?'} → 注入后前台 {after or '?'}\n"
             f"  {verdict}" + (f"：{result.reason}" if result.reason else "")
         )
+
+    def note_segments(self, count: int) -> None:
+        self.segments_note = f"长句在停顿处切成 {count} 小段分别转录（这样标点才有依据）"
 
     def note_repetition(self, removed: int) -> None:
         self.repetition_note = (
@@ -137,6 +141,9 @@ class Stopwatch:
 
         if self.target_note:
             lines.append(f"  {self.target_note}")
+
+        if self.segments_note:
+            lines.append(f"  {self.segments_note}")
 
         if self.repetition_note:
             lines.append(f"  {self.repetition_note}")

@@ -38,13 +38,25 @@ from backend.punctuation import close_sentence, collapse_repetition
 from backend.punctuation import normalise as normalise_punctuation
 from backend.scratchpad import Scratchpad, SessionArchive
 from backend.timing import Stopwatch
-from backend.vad import SAMPLE_RATE, SileroVad, has_speech
+from backend.vad import SAMPLE_RATE, SileroVad, SpeechEnd, VadSegmenter, has_speech
 
 log = logging.getLogger(__name__)
 
 __all__ = ["DictationDaemon", "HotkeyError"]
 
 WARM_UP_SECONDS = 1.0
+
+# Past this, a single hold is split at its own pauses before transcription.
+#
+# Whisper punctuates what it can see the shape of. Handed 65 seconds of
+# unbroken speech — measured on the author's own dictation — it returns 65
+# seconds of unbroken text with a single full stop at the end, because nothing
+# in that block tells it where one thought finished. Cut at the pauses the
+# speaker already made and each piece comes back punctuated.
+#
+# 20s rather than lower: below that Whisper's own windowing copes, and each
+# extra cut costs another ~1s model pass.
+SEGMENT_ABOVE_SECONDS = 20.0
 TARGET_MS_WITHOUT_POLISH = 1500
 TARGET_MS_WITH_POLISH = 3000
 
@@ -352,11 +364,7 @@ class DictationDaemon:
 
         try:
             with watch.span("transcription"):
-                raw = self.stt.transcribe(
-                    job.audio,
-                    language=self.config.dictate_language,
-                    initial_prompt=self._vocabulary_prompt(),
-                )
+                raw = self._transcribe(job.audio, watch)
         except Exception:
             # One utterance lost, the session continues. Nothing has been shown
             # to the user yet, so there is nothing inconsistent to clean up.
@@ -443,6 +451,54 @@ class DictationDaemon:
     @property
     def _polishing(self) -> bool:
         return bool(self.config.polish_enabled and self.polish is not None)
+
+    def _transcribe(self, audio: np.ndarray, watch) -> str:
+        """One pass for a short hold; clause by clause for a long one."""
+        prompt = self._vocabulary_prompt()
+        language = self.config.dictate_language
+
+        if len(audio) / SAMPLE_RATE <= SEGMENT_ABOVE_SECONDS:
+            return self.stt.transcribe(audio, language=language, initial_prompt=prompt)
+
+        pieces = self._split_at_pauses(audio)
+        if len(pieces) < 2:
+            return self.stt.transcribe(audio, language=language, initial_prompt=prompt)
+
+        watch.note_segments(len(pieces))
+        out = []
+        for piece in pieces:
+            text = self.stt.transcribe(piece, language=language, initial_prompt=prompt)
+            if text and text.strip():
+                out.append(text.strip())
+        from backend.scratchpad import join_text
+
+        return join_text(out)
+
+    def _split_at_pauses(self, audio: np.ndarray) -> list[np.ndarray]:
+        """Cut a long hold where the speaker paused. Falls back to one piece."""
+        try:
+            if self._vad is None:
+                self._vad = SileroVad()
+            self._vad.reset()
+            segmenter = VadSegmenter(
+                vad_silence_ms=self.config.vad_silence_ms,
+                vad_sensitivity=self.config.vad_sensitivity,
+                max_utterance_sec=self.config.max_utterance_sec,
+                speech_prob=self._vad.speech_prob,
+            )
+            pieces = []
+            step = 1600
+            for i in range(0, len(audio), step):
+                for event in segmenter.feed(audio[i : i + step]):
+                    if isinstance(event, SpeechEnd) and len(event.audio):
+                        pieces.append(event.audio)
+            for event in segmenter.flush():
+                if isinstance(event, SpeechEnd) and len(event.audio):
+                    pieces.append(event.audio)
+            return pieces
+        except Exception:
+            log.warning("could not split the utterance, transcribing whole", exc_info=True)
+            return []
 
     def _has_speech(self, audio: np.ndarray) -> bool:
         """Reuses one silero session for the life of the daemon — constructing
