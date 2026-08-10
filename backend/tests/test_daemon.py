@@ -1054,3 +1054,44 @@ def test_the_microphone_open_is_not_counted_in_the_end_to_end_total():
     assert watch.mic_open_ms == pytest.approx(310, abs=1)
     assert not any("开麦" in s.name for s in watch.stages)
     assert 310 not in [round(s.ms) for s in watch.stages if s.ms is not None]
+
+
+def test_the_polish_toggle_actually_rebuilds_the_callable():
+    """The menu flipped config.polish_enabled and nothing else, so switching
+    polish on mid-session did nothing at all — v1's Save button again."""
+    built = []
+
+    def factory(config):
+        built.append(config.polish_enabled)
+        return (lambda text, context=None: text + "。") if config.polish_enabled else None
+
+    d = build(polish_factory=factory)
+    assert d.polish is None
+
+    on, _ = d.set_polish(True)
+    assert on and d.polish is not None
+    assert built == [True]
+
+    d.set_polish(False)
+    assert d.polish is None
+
+
+def test_asking_for_polish_with_no_key_leaves_the_menu_honest():
+    """A tick next to 润色 that does not polish is worse than no tick."""
+    d = build(polish_factory=lambda config: None)
+
+    on, why = d.set_polish(True)
+
+    assert on is False
+    assert d.config.polish_enabled is False, "the menu must not show it as on"
+    assert "API key" in why
+
+
+def test_changing_the_level_rebuilds_too():
+    seen = []
+    d = build(polish_factory=lambda c: seen.append(c.polish_level) or (lambda t, context=None: t))
+
+    d.set_polish(True, "heavy")
+
+    assert d.config.polish_level == "heavy"
+    assert seen == ["heavy"]

@@ -37,8 +37,15 @@ class MenuBar:
 
             class _Delegate(AppKit.NSObject):
                 def togglePolish_(self, _sender):
-                    outer.daemon.config.polish_enabled = not outer.daemon.config.polish_enabled
-                    outer._persist()
+                    want = not outer.daemon.config.polish_enabled
+                    on, why = outer.daemon.set_polish(want)
+                    if want and not on:
+                        outer._notify("润色打不开", why)
+                    outer._rebuild()
+
+                def pickPolishLevel_(self, sender):
+                    outer.daemon.set_polish(True, str(sender.representedObject()))
+                    outer._rebuild()
 
                 def toggleTarget_(self, _sender):
                     current = outer.daemon.config.dictate_target
@@ -146,7 +153,32 @@ class MenuBar:
 
             add(f"按住 {config.hotkey_push or '未设置'} 说话", None, False)
             menu.addItem_(AppKit.NSMenuItem.separatorItem())
-            add(f"润色：{'开' if config.polish_enabled else '关'}", "togglePolish:")
+            add(
+                f"润色：{'开（' + config.polish_level + '）' if config.polish_enabled else '关'}",
+                "togglePolish:",
+            )
+            if config.polish_enabled:
+                # Only the levels 铁律 10 defines, and the name says what each
+                # one is allowed to touch — "medium" tells the author nothing
+                # about what a model is about to do to their argument.
+                levels = AppKit.NSMenu.alloc().init()
+                for value, label in (
+                    ("light", "轻 —— 只补标点"),
+                    ("medium", "中 —— 标点 + 删口水词"),
+                    ("heavy", "重 —— 标点 + 口水词 + 分段"),
+                ):
+                    item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                        label, "pickPolishLevel:", ""
+                    )
+                    item.setTarget_(self._delegate)
+                    item.setRepresentedObject_(value)
+                    item.setState_(1 if config.polish_level == value else 0)
+                    levels.addItem_(item)
+                holder = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    "  润色档位", None, ""
+                )
+                menu.addItem_(holder)
+                menu.setSubmenu_forItem_(levels, holder)
 
             # Switching engines and languages is the whole comparison the author
             # is running. Making it cost a terminal visit is how a comparison

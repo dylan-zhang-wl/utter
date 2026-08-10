@@ -17,6 +17,7 @@ capture belongs to P2 where the hotkey defines the segment.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import time
 from pathlib import Path
@@ -29,6 +30,8 @@ from backend.hardware import detect as detect_hardware
 from backend.pipeline import dictate_pipeline, listen_pipeline
 from backend.providers.stt import NoProviderAvailable, get_stt_provider, probe_all
 from backend.vad import SAMPLE_RATE, VadSegmenter
+
+log = logging.getLogger(__name__)
 
 CHUNK = 1600  # 100 ms, the size a microphone callback would deliver
 
@@ -142,11 +145,64 @@ def _dictation_checks(config) -> dict[str, tuple[bool, str]]:
     return checks
 
 
+def build_polish(config):
+    """Turn config into the callable the daemon expects, or None.
+
+    P2a Task 8. Everything under it — the prompts, the levels, the length-ratio
+    guard, the fall-back-to-raw contract — has existed and been tested since
+    P1. Nothing ever constructed the callable, so `polish_enabled: true` did
+    precisely nothing. A setting that silently does nothing is the same failure
+    as v1's Save button.
+
+    Returns None when polish is off or unreachable, and the daemon treats None
+    as "off" — never as an error. 铁律 8: a missing key costs the polish, never
+    the words.
+    """
+    if not config.polish_enabled:
+        return None
+
+    provider = _llm_provider_named(config.llm_provider)
+    if provider is None:
+        log.warning("polish is on but %r is unknown", config.llm_provider)
+        return None
+
+    available, reason = provider.is_available()
+    if not available:
+        # Loud, because the author switched this on and expects it to happen.
+        print(f"\n⚠ 润色开着，但 {provider.display_name} 用不了：{reason}\n"
+              "  这次会照常听写，只是不润色。\n", flush=True)
+        return None
+
+    from backend.providers.llm import safe_polish
+
+    def polish(text: str, context: str | None = None) -> str:
+        # safe_polish returns (text, polished?) and never raises; the daemon
+        # only wants the text, and treats "unchanged" as not polished.
+        result, _ = safe_polish(
+            provider,
+            text,
+            level=config.polish_level,
+            context=context,
+            vocabulary=list(config.vocabulary),
+        )
+        return result
+
+    return polish
+
+
+def _llm_provider_named(name: str):
+    for provider in _llm_providers():
+        if provider.id == name:
+            return provider
+    return None
+
+
 def _llm_providers():
     """Instantiated defensively — a broken optional dependency should degrade
     one line of `doctor`, not the whole command."""
     found = []
     for module_name, class_name in (
+        ("backend.providers.gemini", "GeminiProvider"),
         ("backend.providers.ollama", "OllamaProvider"),
         ("backend.providers.openai_compat", "OpenAICompatProvider"),
         ("backend.providers.free_translate", "FreeTranslateProvider"),
@@ -295,6 +351,111 @@ def _build_stamp() -> str:
         return ""
 
 
+#: Which Keychain entry each provider reads, so `utter key` can name them
+#: rather than making the author find the string in the source.
+KEY_NAMES = {
+    "google_api_key": "Gemini — https://aistudio.google.com/apikey",
+    "openai_api_key": "OpenAI / DeepSeek / Groq 等 OpenAI 兼容端点",
+}
+
+
+def cmd_key(args, out) -> int:
+    """Store an API key in the Keychain, without it ever touching a file.
+
+    铁律 4. The alternative on offer was `security add-generic-password`, which
+    works but requires getting the service name exactly right by hand — and a
+    key stored under the wrong service reads back as "no key stored", which is
+    a miserable thing to debug.
+
+    getpass, so the key is not echoed and does not enter shell history. Nothing
+    here logs the value, and the only confirmation printed is its length.
+    """
+    import getpass
+
+    from backend import secrets
+
+    if args.name == "list" or not args.name:
+        print("可以存的 key：\n", file=out)
+        for name, what in KEY_NAMES.items():
+            stored = "✓ 已存" if secrets.get_secret(name) else "— 没存"
+            print(f"  {stored}  {name:<16} {what}", file=out)
+        print(f"\n存一个：utter key google_api_key\n删掉：utter key google_api_key --forget", file=out)
+        return 0
+
+    if args.forget:
+        secrets.delete_secret(args.name)
+        print(f"已删除 {args.name}。", file=out)
+        return 0
+
+    print(f"粘贴 {args.name}（不会显示，也不会进 shell 历史），回车确认：", file=out)
+    try:
+        value = getpass.getpass("").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n取消了，什么都没改。", file=out)
+        return 1
+    if not value:
+        print("空的，什么都没改。", file=out)
+        return 1
+
+    secrets.set_secret(args.name, value)
+    stored = secrets.get_secret(args.name)
+    if stored != value:
+        print("⚠ 写进钥匙串后读回来对不上，没存成。", file=out)
+        return 1
+    # Length only. Printing any part of a key is how keys end up in screenshots.
+    print(f"✓ 已存进钥匙串（{len(value)} 个字符）。用 `utter doctor` 确认。", file=out)
+    return 0
+
+
+def cmd_polish(args, out) -> int:
+    """Run the polish prompt against the real model, on text you type.
+
+    P2a Task 8 says the prompt must be *verified* against a real model, and
+    verifying it through dictation would mean the author speaking a paragraph
+    every time a wording changes. This takes the text on the command line, so
+    the same input can be run against every level and every model.
+
+    It prints both versions, because 铁律 10's whole defence is that the
+    original stays visible.
+    """
+    from backend.providers.llm import polish_prompt, safe_polish
+
+    config = load_config()
+    name = args.provider or config.llm_provider
+    provider = _llm_provider_named(name)
+    if provider is None:
+        print(f"没有叫 {name!r} 的 LLM provider。`utter doctor` 列了有哪些。", file=out)
+        return 1
+
+    available, reason = provider.is_available()
+    if not available:
+        print(f"{provider.display_name} 用不了：{reason}", file=out)
+        return 1
+
+    text = args.text or sys.stdin.read()
+    if not text.strip():
+        print("没有输入。用法：utter polish '要处理的文字'", file=out)
+        return 1
+
+    levels = [args.level] if args.level else ["light", "medium", "heavy"]
+    print(f"模型  {getattr(provider, 'model', provider.display_name)}\n", file=out)
+    print(f"原文  {text.strip()}\n", file=out)
+
+    for level in levels:
+        started = time.perf_counter()
+        result, changed = safe_polish(
+            provider, text.strip(), level=level,
+            vocabulary=list(config.vocabulary),
+        )
+        ms = (time.perf_counter() - started) * 1000
+        mark = "" if changed else "   ⚠ 没有采用（降级回原文）"
+        print(f"[{level:<6}] {ms:5.0f} ms{mark}\n  {result}\n", file=out)
+
+    if args.show_prompt:
+        print(f"\n--- system prompt ({levels[0]}) ---\n{polish_prompt(levels[0])}", file=out)
+    return 0
+
+
 def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
     """Run the resident dictation daemon until interrupted."""
     from backend.daemon import DictationDaemon
@@ -312,6 +473,9 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
         except NoProviderAvailable as exc:
             print(str(exc), file=out)
             return 1
+
+    if polish is None:
+        polish = build_polish(config)
 
     # Before anything expensive. A second instance steals half the hotkey
     # presses and half the microphone, and looks from the outside like a broken
@@ -337,7 +501,12 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
         overlay = Overlay()
 
     daemon = DictationDaemon(
-        config=config, stt=stt, polish=polish, on_text=show, overlay=overlay
+        config=config,
+        stt=stt,
+        polish=polish,
+        polish_factory=build_polish,  # so the menu's toggle actually does something
+        on_text=show,
+        overlay=overlay,
     )
 
     where = "光标处" if config.dictate_target == "cursor" else "暂存区（不注入）"
@@ -582,6 +751,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="delete archives older than DAYS days (no default — you name the number)",
     )
 
+    key = sub.add_parser("key", help="store an API key in the Keychain (铁律 4)")
+    key.add_argument("name", nargs="?", help="e.g. google_api_key; omit to list")
+    key.add_argument("--forget", action="store_true", help="delete it instead")
+
+    polish_cmd = sub.add_parser(
+        "polish", help="run the polish prompt on text, to check it before trusting it"
+    )
+    polish_cmd.add_argument("text", nargs="?", help="text to polish (or pipe it in)")
+    polish_cmd.add_argument("--level", choices=["light", "medium", "heavy"], default=None,
+                            help="one level; omit to compare all three")
+    polish_cmd.add_argument("--provider", default=None, help="override config.llm_provider")
+    polish_cmd.add_argument("--show-prompt", action="store_true")
+
     keys = sub.add_parser("keys", help="find a hotkey nothing else has claimed")
     keys.add_argument("--seconds", type=float, default=60.0)
 
@@ -613,6 +795,10 @@ def main(argv=None, stdout=None, **overrides) -> int:
         return cmd_mics(args, out)
     if args.command == "sessions":
         return cmd_sessions(args, out)
+    if args.command == "key":
+        return cmd_key(args, out)
+    if args.command == "polish":
+        return cmd_polish(args, out)
     if args.command == "keys":
         from backend import keyprobe
 

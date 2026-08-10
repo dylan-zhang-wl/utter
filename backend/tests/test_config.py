@@ -20,7 +20,10 @@ def test_defaults_match_the_design():
     c = cfg.AppConfig()
     assert c.stt_provider == "auto"
     assert c.model_tier == "balanced"
-    assert c.llm_provider == "ollama"
+    # Gemini, not Ollama, since 2026-08-10. A 16GB machine already holding
+    # Whisper has no room for a local language model, and polish is one short
+    # request per utterance — well inside a free tier.
+    assert c.llm_provider == "gemini"
     assert c.vad_silence_ms == 600
     assert c.vad_sensitivity == 0.5
     assert c.max_utterance_sec == 30

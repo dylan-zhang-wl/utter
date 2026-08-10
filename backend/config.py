@@ -37,7 +37,11 @@ class AppConfig(BaseModel):
     # --- v3 core ---
     stt_provider: str = "auto"  # "auto" lets the registry pick by hardware
     model_tier: ModelTier = "balanced"
-    llm_provider: str = "ollama"
+    # Gemini rather than Ollama. The author chose a hosted free tier over a
+    # local model on 2026-08-10 — a 16GB machine already holding Whisper in
+    # memory has no room for a language model as well, and polish is one short
+    # request per utterance, which the free quota covers.
+    llm_provider: str = "gemini"
 
     # --- audio input ---
     # None means "whatever macOS calls the default". Not a safe assumption on

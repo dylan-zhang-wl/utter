@@ -128,6 +128,13 @@ class DictationDaemon:
     make_mic: Callable[[], object] | None = None
     hotkey_factory: Callable[[Callable[[HotkeyEvent], None]], object] | None = None
     polish: Callable[..., str] | None = None
+    polish_factory: Callable[[AppConfig], Callable[..., str] | None] | None = None
+    """Rebuilds `polish` from config when the menu changes a setting.
+
+    Without it the menu's 润色 toggle flips a boolean and nothing else: the
+    callable was decided at startup, so switching polish on mid-session did
+    exactly nothing. That is v1's Save button again, and it is worth a field to
+    make impossible."""
     on_text: Callable[[Utterance], None] | None = None
     speech_check: Callable[[np.ndarray], bool] | None = None
     """Overridable so tests can drive the wiring without a real VAD session."""
@@ -287,6 +294,29 @@ class DictationDaemon:
         self._warm_up()
         log.info("switched to %s", provider.display_name)
         return True, provider.display_name
+
+    def set_polish(self, enabled: bool, level: str | None = None) -> tuple[bool, str]:
+        """Turn polish on or off, or change its level, without a restart.
+
+        Returns (is it actually on now, what to tell the user). "Actually" is
+        the load-bearing word: asking for polish with no API key stored leaves
+        it off, and the menu must show off rather than a tick that lies.
+        """
+        self.config.polish_enabled = enabled
+        if level is not None:
+            self.config.polish_level = level
+        self._save_config()
+
+        if self.polish_factory is None:
+            # Headless or under test. Honour the flag; there is nothing to build.
+            return enabled, ""
+
+        self.polish = self.polish_factory(self.config)
+        if enabled and self.polish is None:
+            self.config.polish_enabled = False
+            self._save_config()
+            return False, "没有可用的 LLM —— 先存 API key（utter doctor 里有说明）"
+        return bool(self.polish), ""
 
     def _save_config(self) -> None:
         """Persist whatever the menu just changed.

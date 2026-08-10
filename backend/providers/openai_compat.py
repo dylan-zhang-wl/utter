@@ -45,7 +45,9 @@ class OpenAICompatProvider:
         was wrong.
         """
         if not self._key():
-            return False, f"no API key stored for {self.secret_name} (add one in settings)"
+            # Name the command. "add one in settings" pointed at a settings
+            # screen that does not exist.
+            return False, f"钥匙串里没有 {self.secret_name} —— 跑 `utter key {self.secret_name}` 存一个"
         return True, ""
 
     def complete(self, system: str, user: str) -> str:
