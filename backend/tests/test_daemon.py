@@ -704,36 +704,14 @@ class LongMic(FakeMic):
     def __init__(self, seconds):
         super().__init__(seconds=seconds)
 
-
-def test_a_long_hold_is_split_at_pauses(monkeypatch):
-    """65 seconds of unbroken speech came back as one run-on sentence with a
-    single full stop. Whisper punctuates what it can see the shape of; handed
-    one undifferentiated block it has nothing to go on."""
-    stt = FakeStt(texts=["第一句。", "第二句。", "第三句。"])
-    d = build(stt=stt, mic=LongMic(30.0))
-    monkeypatch.setattr(
-        d, "_split_at_pauses",
-        lambda audio: [audio[:16000], audio[16000:32000], audio[32000:48000]],
-    )
-    d.start()
-    before = len(stt.calls)
-    d.begin_utterance()
-    d.end_utterance()
-    d.wait_idle()
-
-    assert len(stt.calls) - before == 3, "one model pass per clause"
-    # FakeStt cycles its texts and the warm-up consumed one, so assert the
-    # pieces were joined rather than pinning an order the fake decides.
-    text = d.scratchpad.entries[0].text
-    assert all(piece in text for piece in ("第一句。", "第二句。", "第三句。"))
-    d.stop()
-
-
-def test_a_short_hold_is_not_split():
-    """Below the threshold Whisper's own windowing copes, and each extra cut
-    costs another model pass."""
+def test_a_long_hold_is_one_model_pass():
+    """Splitting was tried and measured against the author's real dictation: a
+    24.2s hold split into clauses came back with *fewer* punctuation marks than
+    a 16.4s one left whole, and cost five model passes instead of one. Whisper's
+    Chinese punctuation is sparse at every length, so there was nothing to
+    unlock. Punctuation is a language task; it belongs to polish."""
     stt = FakeStt()
-    d = build(stt=stt, mic=FakeMic(seconds=3.0))
+    d = build(stt=stt, mic=LongMic(40.0))
     d.start()
     before = len(stt.calls)
     d.begin_utterance()
@@ -759,26 +737,6 @@ def test_a_failed_split_falls_back_to_one_pass(monkeypatch):
     assert len(stt.calls) - before == 1
     assert d.scratchpad.entries[0].text
     d.stop()
-
-
-def test_a_speaker_who_never_pauses_is_still_split(monkeypatch):
-    """Measured on the author's own dictation: 30 seconds of fluent speech
-    contains no 600ms gap, so the pause-based split returned one piece and
-    Whisper got the lot — 104 characters, two punctuation marks. An arbitrary
-    boundary that yields punctuated clauses beats a natural one that yields
-    none."""
-    stt = FakeStt(texts=["一。", "二。", "三。"])
-    d = build(stt=stt, mic=LongMic(30.0))
-    monkeypatch.setattr(d, "_split_at_pauses", lambda audio: [])  # no breath found
-    d.start()
-    before = len(stt.calls)
-    d.begin_utterance()
-    d.end_utterance()
-    d.wait_idle()
-
-    assert len(stt.calls) - before > 1, "should have fallen back to a fixed interval"
-    d.stop()
-
 
 def test_clause_split_uses_a_shorter_silence_than_utterance_split():
     """600ms answers "is that utterance over"; a clause boundary is a breath."""

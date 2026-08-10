@@ -56,7 +56,26 @@ WARM_UP_SECONDS = 1.0
 #
 # 20s rather than lower: below that Whisper's own windowing copes, and each
 # extra cut costs another ~1s model pass.
-SEGMENT_ABOVE_SECONDS = 20.0
+# Splitting a long hold into clauses is DISABLED. Set a number of seconds to
+# re-enable it, but read this first.
+#
+# The idea was that Whisper punctuates what it can see the shape of, so cutting
+# a long hold at its pauses would give each clause its own punctuation. Measured
+# against the author's real dictation, it does not:
+#
+#   16.4s, not split  -> 4 punctuation marks
+#   24.2s, split      -> 2 punctuation marks
+#
+# And a 3.4-second Chinese question — exactly what one of those pieces looks
+# like — comes back as 「所以这个标点的问题到底应该怎么解决了。」 with no question
+# mark and no internal comma. Whisper's Chinese punctuation is sparse at every
+# length, so there was nothing for the split to unlock.
+#
+# It also cost real time: five model passes for a 30-second hold where one would
+# do, which is the slowness the author noticed. Deciding where a comma belongs
+# in a run-on Chinese sentence is a language task, not an audio one — it belongs
+# to polish, which 铁律 10 explicitly permits to add punctuation.
+SEGMENT_ABOVE_SECONDS = None
 
 # Silence threshold used ONLY when carving up a long hold. Deliberately far
 # below config.vad_silence_ms (600ms), which answers a different question.
@@ -510,7 +529,10 @@ class DictationDaemon:
         prompt = self._vocabulary_prompt()
         language = self.config.dictate_language
 
-        if len(audio) / SAMPLE_RATE <= SEGMENT_ABOVE_SECONDS:
+        if (
+            SEGMENT_ABOVE_SECONDS is None
+            or len(audio) / SAMPLE_RATE <= SEGMENT_ABOVE_SECONDS
+        ):
             return self.stt.transcribe(audio, language=language, initial_prompt=prompt)
 
         pieces = self._split_at_pauses(audio)
