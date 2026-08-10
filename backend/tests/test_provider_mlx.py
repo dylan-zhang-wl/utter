@@ -50,16 +50,29 @@ def test_temperature_is_pinned_to_zero(monkeypatch, fake_mlx):
     on_apple(monkeypatch)
     mlx_provider.MlxWhisperProvider().transcribe(audio())
 
-    assert fake_mlx[0]["temperature"] == 0.0
+    assert fake_mlx[0]["temperature"][0] == 0.0, "the first pass must be greedy"
 
 
-def test_temperature_is_a_scalar_not_the_default_ladder(monkeypatch, fake_mlx):
-    """Passing the tuple would satisfy a naive `"temperature" in kwargs` check
-    while restoring exactly the behaviour 铁律 1 forbids."""
+def test_the_fallback_ladder_is_bounded(monkeypatch, fake_mlx):
+    """铁律 1 as amended: bound the worst case, do not forbid retrying.
+
+    The six-step default costs 8-11s on a hard chunk. A scalar 0.0 costs a
+    repetition loop with no escape — the author got "of the model sign" fifty
+    times in one utterance, because compression_ratio detects degeneracy and
+    then has nothing to fall back to. Two steps caps the worst case near 2.2s.
+    """
     on_apple(monkeypatch)
     mlx_provider.MlxWhisperProvider().transcribe(audio())
 
-    assert not isinstance(fake_mlx[0]["temperature"], (tuple, list))
+    assert len(fake_mlx[0]["temperature"]) <= 2
+
+
+def test_previous_text_does_not_condition_the_next_window(monkeypatch, fake_mlx):
+    """It is how a repetition beginning in one window feeds itself into the next."""
+    on_apple(monkeypatch)
+    mlx_provider.MlxWhisperProvider().transcribe(audio())
+
+    assert fake_mlx[0]["condition_on_previous_text"] is False
 
 
 # --- availability ------------------------------------------------------------

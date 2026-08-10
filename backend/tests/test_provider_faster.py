@@ -62,14 +62,22 @@ def test_temperature_is_pinned_to_zero(monkeypatch, fake_fw):
     on_hardware(monkeypatch, "cpu")
     faster_provider.FasterWhisperProvider().transcribe(audio())
 
-    assert fake_fw["calls"][0]["temperature"] == 0.0
+    assert fake_fw["calls"][0]["temperature"][0] == 0.0, "the first pass must be greedy"
 
 
-def test_temperature_is_a_scalar_not_the_default_ladder(monkeypatch, fake_fw):
+def test_the_fallback_ladder_is_bounded(monkeypatch, fake_fw):
+    """See the MLX provider's version — same amendment, same reasoning."""
     on_hardware(monkeypatch, "cpu")
     faster_provider.FasterWhisperProvider().transcribe(audio())
 
-    assert not isinstance(fake_fw["calls"][0]["temperature"], (tuple, list))
+    assert len(fake_fw["calls"][0]["temperature"]) <= 2
+
+
+def test_previous_text_does_not_condition_the_next_window(monkeypatch, fake_fw):
+    on_hardware(monkeypatch, "cpu")
+    faster_provider.FasterWhisperProvider().transcribe(audio())
+
+    assert fake_fw["calls"][0]["condition_on_previous_text"] is False
 
 
 # --- device selection --------------------------------------------------------
