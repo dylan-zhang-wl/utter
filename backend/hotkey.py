@@ -35,11 +35,24 @@ log = logging.getLogger(__name__)
 Mode = Literal["push", "toggle"]
 MODES = ("push", "toggle")
 
+SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+
+# Written out at length because the short version sent the author to the wrong
+# pane. macOS has two settings pages called 辅助功能: the accessibility *features*
+# (VoiceOver, Zoom) at the top level, and the permission list buried under
+# 隐私与安全性. They are one click apart and identically named.
 PERMISSION_HINT = (
-    "缺少「辅助功能」权限，热键收不到任何按键。"
-    "请到 系统设置 → 隐私与安全性 → 辅助功能 中勾选运行 Utter 的那个程序"
-    "（从终端运行时，要勾的是那个终端应用本身，不是 Python）。"
-    "(Accessibility permission missing — see System Settings → Privacy & Security)"
+    "缺少「辅助功能」权限，热键收不到任何按键。\n"
+    "\n"
+    "  1. 打开权限页（注意不是系统设置里那个同名的「辅助功能」功能页）：\n"
+    f"       open '{SETTINGS_URL}'\n"
+    "  2. 在名单里打开「终端」的开关；没有就点 + 号，从 应用程序/实用工具 里添加。\n"
+    "     勾的是终端本身，不是 Python —— macOS 把权限发给发起进程的那个 app。\n"
+    "  3. ⌘Q 完全退出终端再重开。权限只在启动时读取一次。\n"
+    "  4. 用 `utter doctor` 确认。\n"
+    "\n"
+    "(Accessibility permission missing. Grant it to your terminal app, then "
+    "quit and relaunch it — the permission is only read at launch.)"
 )
 
 
