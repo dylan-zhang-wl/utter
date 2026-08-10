@@ -12,7 +12,11 @@ import logging
 
 log = logging.getLogger(__name__)
 
-IDLE, BUSY = "􀊰", "􀊱"  # SF Symbols fall back harmlessly if unavailable
+# SF Symbol *names*, not glyph characters. Passing the private-use codepoints
+# to setTitle_ renders a question mark in every font that does not carry them,
+# which is what the author saw. NSImage resolves them properly, and setTemplate_
+# lets macOS invert the icon for light and dark menu bars.
+IDLE_SYMBOL, BUSY_SYMBOL = "waveform", "waveform.circle.fill"
 
 
 class MenuBar:
@@ -64,7 +68,7 @@ class MenuBar:
             self._delegate = _Delegate.alloc().init()
             bar = AppKit.NSStatusBar.systemStatusBar()
             self._item = bar.statusItemWithLength_(AppKit.NSVariableStatusItemLength)
-            self._item.button().setTitle_(IDLE)
+            self._set_symbol(IDLE_SYMBOL)
             self._rebuild()
             return True
         except Exception:
@@ -72,12 +76,25 @@ class MenuBar:
             return False
 
     def set_busy(self, busy: bool) -> None:
+        self._set_symbol(BUSY_SYMBOL if busy else IDLE_SYMBOL)
+
+    def _set_symbol(self, name: str) -> None:
         if self._item is None:
             return
         try:
-            self._item.button().setTitle_(BUSY if busy else IDLE)
+            import AppKit
+
+            image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+                name, "Utter"
+            )
+            if image is None:  # very old macOS
+                self._item.button().setTitle_("U")
+                return
+            image.setTemplate_(True)
+            self._item.button().setImage_(image)
+            self._item.button().setTitle_("")
         except Exception:  # pragma: no cover
-            pass
+            log.warning("could not set the menu bar symbol", exc_info=True)
 
     def _rebuild(self) -> None:
         try:

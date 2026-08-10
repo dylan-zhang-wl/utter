@@ -749,6 +749,7 @@ def test_a_failed_split_falls_back_to_one_pass(monkeypatch):
     stt = FakeStt()
     d = build(stt=stt, mic=LongMic(30.0))
     monkeypatch.setattr(d, "_split_at_pauses", lambda audio: [])
+    monkeypatch.setattr(d, "_split_evenly", lambda audio, seconds=14.0: [])
     d.start()
     before = len(stt.calls)
     d.begin_utterance()
@@ -758,3 +759,29 @@ def test_a_failed_split_falls_back_to_one_pass(monkeypatch):
     assert len(stt.calls) - before == 1
     assert d.scratchpad.entries[0].text
     d.stop()
+
+
+def test_a_speaker_who_never_pauses_is_still_split(monkeypatch):
+    """Measured on the author's own dictation: 30 seconds of fluent speech
+    contains no 600ms gap, so the pause-based split returned one piece and
+    Whisper got the lot — 104 characters, two punctuation marks. An arbitrary
+    boundary that yields punctuated clauses beats a natural one that yields
+    none."""
+    stt = FakeStt(texts=["一。", "二。", "三。"])
+    d = build(stt=stt, mic=LongMic(30.0))
+    monkeypatch.setattr(d, "_split_at_pauses", lambda audio: [])  # no breath found
+    d.start()
+    before = len(stt.calls)
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    assert len(stt.calls) - before > 1, "should have fallen back to a fixed interval"
+    d.stop()
+
+
+def test_clause_split_uses_a_shorter_silence_than_utterance_split():
+    """600ms answers "is that utterance over"; a clause boundary is a breath."""
+    from backend.config import AppConfig
+
+    assert daemon_mod.CLAUSE_SILENCE_MS < AppConfig().vad_silence_ms

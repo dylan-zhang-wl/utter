@@ -57,6 +57,16 @@ WARM_UP_SECONDS = 1.0
 # 20s rather than lower: below that Whisper's own windowing copes, and each
 # extra cut costs another ~1s model pass.
 SEGMENT_ABOVE_SECONDS = 20.0
+
+# Silence threshold used ONLY when carving up a long hold. Deliberately far
+# below config.vad_silence_ms (600ms), which answers a different question.
+#
+# 600ms means "that utterance is over" — right for listen mode, wrong here. The
+# author dictates fluently, breathing for two or three hundred milliseconds
+# between clauses, so at 600ms a 30-second hold yielded exactly one piece and
+# went to Whisper whole: 104 characters, two punctuation marks. What we want
+# here is the clause boundary, and that is what a breath is.
+CLAUSE_SILENCE_MS = 320
 TARGET_MS_WITHOUT_POLISH = 1500
 TARGET_MS_WITH_POLISH = 3000
 
@@ -505,6 +515,12 @@ class DictationDaemon:
 
         pieces = self._split_at_pauses(audio)
         if len(pieces) < 2:
+            # No breath long enough to cut at. Rather than hand Whisper a
+            # minute of unbroken speech again, cut on a fixed interval — an
+            # arbitrary boundary that produces punctuated clauses beats a
+            # natural one that produces none.
+            pieces = self._split_evenly(audio)
+        if len(pieces) < 2:
             return self.stt.transcribe(audio, language=language, initial_prompt=prompt)
 
         watch.note_segments(len(pieces))
@@ -517,6 +533,13 @@ class DictationDaemon:
 
         return join_text(out)
 
+    def _split_evenly(self, audio: np.ndarray, seconds: float = 14.0) -> list[np.ndarray]:
+        """Last resort for a speaker who never pauses long enough to cut at."""
+        step = int(seconds * SAMPLE_RATE)
+        if len(audio) <= step:
+            return []
+        return [audio[i : i + step] for i in range(0, len(audio), step)]
+
     def _split_at_pauses(self, audio: np.ndarray) -> list[np.ndarray]:
         """Cut a long hold where the speaker paused. Falls back to one piece."""
         try:
@@ -524,7 +547,7 @@ class DictationDaemon:
                 self._vad = SileroVad()
             self._vad.reset()
             segmenter = VadSegmenter(
-                vad_silence_ms=self.config.vad_silence_ms,
+                vad_silence_ms=CLAUSE_SILENCE_MS,
                 vad_sensitivity=self.config.vad_sensitivity,
                 max_utterance_sec=self.config.max_utterance_sec,
                 speech_prob=self._vad.speech_prob,
