@@ -99,8 +99,17 @@ CLAUSE_SILENCE_MS = 320
 # pass did not quietly change what counts as silence.
 MIN_SPEECH_SECONDS = 3 * 512 / SAMPLE_RATE
 
+# The fixed part of the budget: everything that does not depend on how long
+# the author spoke — the speech check, the polish round trip, the paste.
 TARGET_MS_WITHOUT_POLISH = 1500
 TARGET_MS_WITH_POLISH = 3000
+
+# And the part that does. Whisper turbo runs at 90–146ms per second of audio on
+# this machine, so a fixed ceiling meant every hold over about fifteen seconds
+# tripped the warning: 3857ms to transcribe 28.2 seconds is entirely normal and
+# was being flagged as slow. A warning that fires on healthy runs is one the
+# author learns to ignore, which is worse than not having it.
+TARGET_MS_PER_AUDIO_SECOND = 150
 
 
 @dataclass
@@ -568,11 +577,15 @@ class DictationDaemon:
                 self.overlay.hide()
 
     def _process_inner(self, job: _Job) -> None:
+        audio_seconds = len(job.audio) / SAMPLE_RATE
         watch = Stopwatch(
-            target_ms=TARGET_MS_WITH_POLISH if self._polishing else TARGET_MS_WITHOUT_POLISH,
+            target_ms=(
+                (TARGET_MS_WITH_POLISH if self._polishing else TARGET_MS_WITHOUT_POLISH)
+                + TARGET_MS_PER_AUDIO_SECOND * audio_seconds
+            ),
             dropped_chunks=job.dropped,
             overflows=job.overflows,
-            audio_seconds=len(job.audio) / SAMPLE_RATE,
+            audio_seconds=audio_seconds,
             held_seconds=job.held,
             mic_open_ms=job.mic_open,
         )

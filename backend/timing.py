@@ -146,8 +146,15 @@ class Stopwatch:
         # over-target run does not knock the column out of line — which is
         # precisely the run you want to read at a glance.
         total = f"  {'total':<{width}}  {f'{self.total_ms:.0f} ms':>12}"
-        if self.over_target:
-            total += f"   ⚠ over {self.target_ms:.0f} ms"
+        if self.target_ms is not None:
+            # The budget, not just the verdict. It scales with how much was
+            # said, so printing it saves the author working out whether 6.3
+            # seconds for a 28-second hold is a problem.
+            total += (
+                f"   ⚠ 超出预算 {self.target_ms:.0f} ms"
+                if self.over_target
+                else f"   （预算 {self.target_ms:.0f} ms）"
+            )
         lines.append(total)
 
         if self.audio_seconds is not None:

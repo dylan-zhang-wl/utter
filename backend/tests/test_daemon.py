@@ -1123,3 +1123,31 @@ def test_saving_from_the_menu_does_not_clobber_hand_edits(tmp_path, monkeypatch)
     assert after.polish_level == "heavy", "the menu's change was saved"
     assert after.vertex_project == "手工填的项目", "the hand edit survived"
     assert d.config.vertex_project == "手工填的项目", "and memory picked it up"
+
+
+def test_a_long_hold_is_not_flagged_as_slow():
+    """3857ms to transcribe 28.2 seconds is 137ms per audio-second, which is
+    exactly what Whisper turbo does on this machine. A fixed 3000ms ceiling
+    flagged every hold over about fifteen seconds, and a warning that fires on
+    healthy runs is one the author learns to ignore."""
+    d = build(mic=FakeMic(seconds=28.2))
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+    d.stop()
+
+    watch = d.last_timing
+    assert watch.target_ms > 5000, "the budget scales with how much was said"
+    assert "预算" in watch.report()
+
+
+def test_a_short_hold_still_has_a_tight_budget():
+    d = build(mic=FakeMic(seconds=2.0))
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+    d.stop()
+
+    assert d.last_timing.target_ms == pytest.approx(1800, abs=1)
