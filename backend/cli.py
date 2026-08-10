@@ -273,6 +273,28 @@ def cmd_transcribe(args, out, *, stt=None, translate=None, polish=None) -> int:
 # --- entry point -------------------------------------------------------------
 
 
+def _build_stamp() -> str:
+    """Which build is actually running.
+
+    Several rounds of debugging were spent on symptoms that had already been
+    fixed, because the daemon is resident and the author was still running the
+    process from before the fix. Neither of us could tell by looking. Now the
+    banner says.
+    """
+    import subprocess
+    from pathlib import Path as _Path
+
+    repo = _Path(__file__).resolve().parent.parent
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "log", "-1", "--format=%h %cd", "--date=format:%m-%d %H:%M"],
+            capture_output=True, text=True, timeout=3,
+        )
+        return f"(build {out.stdout.strip()})" if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
 def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
     """Run the resident dictation daemon until interrupted."""
     from backend.daemon import DictationDaemon
@@ -306,7 +328,7 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
         else "未设置（`utter keys` 可找一个空闲键）"
     )
     print(
-        f"Utter 听写已就绪\n"
+        f"Utter 听写已就绪   {_build_stamp()}\n"
         f"  按住说 {config.hotkey_push or '未设置'}\n"
         f"  长口述 {toggle_label}\n"
         f"  输出   {where}\n"
