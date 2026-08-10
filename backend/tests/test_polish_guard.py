@@ -9,7 +9,12 @@ juxtaposition, and re-reading will not catch it.
 
 import pytest
 
-from backend.providers.llm import content_changed, content_signature, safe_polish
+from backend.providers.llm import (
+    apply_punctuation,
+    content_changed,
+    content_signature,
+    safe_polish,
+)
 
 RAW = (
     "所以我这一节想讨论的其实是异化和归化这两个概念在数字人文的语境下会不会失效"
@@ -81,10 +86,29 @@ class _Model:
         return self.reply
 
 
-def test_safe_polish_keeps_the_original_when_content_moved():
+def test_safe_polish_keeps_the_words_and_takes_the_punctuation():
+    """It used to reject the whole polish when content moved, which in practice
+    rejected almost every one — the author switched polish on and saw nothing
+    change. Now the model's punctuation is merged onto the transcript's words."""
     result, polished = safe_polish(_Model(MEDIUM), RAW)
+
+    assert polished is True
+    assert content_signature(result) == content_signature(RAW), "因为 came back"
+    assert "，" in result or "？" in result, "and the punctuation was still taken"
+
+
+def test_a_model_that_answers_instead_of_editing_still_yields_the_raw_text():
+    """No punctuation to merge means nothing to gain, so the transcript wins."""
+    result, polished = safe_polish(_Model("好的"), RAW)
     assert result == RAW
     assert polished is False
+
+
+def test_content_is_never_invented_even_when_the_model_adds_a_sentence():
+    reply = LIGHT + "另外我补充一句作者没说过的话。"
+    result, _ = safe_polish(_Model(reply), RAW)
+    assert content_signature(result) == content_signature(RAW)
+    assert "补充一句" not in result
 
 
 def test_safe_polish_accepts_a_clean_punctuation_pass():
@@ -159,3 +183,34 @@ def test_the_model_is_never_told_to_delete_anything():
 
     for level in ("light", "medium", "heavy"):
         assert "删除" not in polish_prompt(level), level
+
+
+# --- merging rather than judging ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,model",
+    [
+        # Every one of these came out of a real run.
+        ("这个我觉得是需要重新界定的", "我觉得这个是需要重新界定的。"),      # reordered
+        ("他说这样不行", "他说：“这样不行。”"),                            # added quotes
+        ("我现在用那个用的那个但是如果是用ADC的", "我现在用的？如果是用ADC的。"),  # deleted
+    ],
+)
+def test_the_merged_result_always_has_the_transcripts_content(raw, model):
+    from backend.providers.llm import content_signature as sig
+
+    assert sig(apply_punctuation(raw, model)) == sig(raw)
+
+
+def test_curly_quotes_do_not_count_as_content():
+    """They were missing from the ignore set, so every utterance the model put
+    a 「“」 into was reported as content added and thrown away."""
+    assert content_changed("他说这样不行", "他说：“这样不行。”") is None
+
+
+def test_whisper_punctuation_is_not_lost_to_a_worse_model_output():
+    """Whisper's Chinese punctuation is sparse but real. A model that returns
+    less of it has nothing to offer."""
+    raw = "第一句。第二句。第三句。"
+    assert apply_punctuation(raw, "第一句 第二句 第三句") == raw

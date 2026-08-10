@@ -143,12 +143,15 @@ def test_safe_polish_returns_the_raw_text_on_failure():
 
 
 def test_safe_polish_reports_success():
-    """The reply has to be a *legal* polish now. This test used to hand back
-    "the tidy words" for "the raw words" and expect success — which the content
-    guard correctly refuses, because swapping a word is exactly what 铁律 10
-    forbids. Punctuation only."""
+    """Punctuation is taken from the model; letters come from the transcript,
+    capitalisation included.
+
+    That is deliberate, and it earns its keep on this author's vocabulary.
+    「van Leeuwen」 is spelled with a lowercase v when the full name is given,
+    and a model asked to tidy English will confidently "correct" it. The full
+    stop is a gain; the capital is a guess."""
     text, polished = llm.safe_polish(FakeLlm(reply="The raw words."), "the raw words")
-    assert text == "The raw words."
+    assert text == "the raw words."
     assert polished is True
 
 

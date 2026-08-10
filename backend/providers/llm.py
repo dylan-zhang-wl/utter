@@ -64,10 +64,27 @@ _FILLERS = (
     "um", "uh", "erm", "you know", "i mean",
 )
 
-# Punctuation and whitespace are the one thing polish IS allowed to change, so
-# they are removed before comparing. Covers both widths, plus the paragraph
-# breaks the heavy level adds.
-_IGNORABLE = re.compile(r"[\s，。？！、；：「」『』（）《》,.?!;:'\"()\[\]—…·-]+")
+# Punctuation and whitespace are the one thing polish IS allowed to change.
+#
+# The curly quotes were missing from the first version and the model uses them
+# constantly, so every utterance that gained a 「“」 was reported as content
+# added and thrown away. Anything punctuation-like that a model might emit
+# belongs here; the cost of a missing character is a rejected polish, and the
+# cost of a wrong one is nil, because content is taken from the transcript
+# either way (see apply_punctuation).
+_IGNORABLE_CHARS = (
+    " \t\r\n"
+    "，。？！、；：·…—～"
+    "「」『』（）〔〕《》〈〉【】"
+    "“”‘’＂＇"
+    ",.?!;:'\"()[]{}<>-–—~…"
+    "＝／＼｜"
+)
+_IGNORABLE = re.compile(f"[{re.escape(_IGNORABLE_CHARS)}]+")
+
+
+def _is_ignorable(char: str) -> bool:
+    return char in _IGNORABLE_CHARS
 
 
 def content_signature(text: str) -> str:
@@ -105,6 +122,74 @@ def content_changed(before: str, after: str) -> str | None:
     if added:
         parts.append(f"加上了「{added[:30]}」")
     return "，".join(parts) or "内容变了"
+
+
+def apply_punctuation(raw: str, polished: str) -> str:
+    """Punctuation from the model, every character of content from the transcript.
+
+    Rejecting a polish that touched content turned out to reject nearly all of
+    them. Told to punctuate and nothing else, the model still tidied — dropping
+    a stammered 「的的」, an 「是的然后」, and in one case a 「但是」. Each rejection
+    fell back to the raw transcript, so the author switched polish on and saw
+    no punctuation at all. A guard that refuses everything protects nothing.
+
+    So this stops judging and starts merging. The two texts are aligned on their
+    content characters; the output walks the *transcript*, emitting its
+    characters in its order, and inserts whatever punctuation the model placed
+    between them. Content the model deleted comes back. Content the model
+    invented never arrives — the gaps are filtered to punctuation before they
+    are used.
+
+    铁律 10 stops being a check that can fail and becomes a property of the
+    construction: the content of the result is the content of the transcript,
+    always.
+    """
+    import difflib
+
+    raw_content = [c for c in raw if not _is_ignorable(c)]
+    if not raw_content:
+        return raw
+
+    polished_index = [j for j, c in enumerate(polished) if not _is_ignorable(c)]
+    polished_content = [polished[j] for j in polished_index]
+
+    blocks = difflib.SequenceMatcher(
+        None, raw_content, polished_content, autojunk=False
+    ).get_matching_blocks()
+    aligned = {}
+    for a, b, size in blocks:
+        for k in range(size):
+            aligned[a + k] = polished_index[b + k]
+
+    def gap(start: int, stop: int) -> str:
+        """Whatever the model put between two content characters — punctuation
+        only. Filtering here is what makes invention impossible."""
+        return "".join(c for c in polished[start:stop] if _is_ignorable(c))
+
+    out: list[str] = []
+    previous = -1
+    for i, char in enumerate(raw_content):
+        j = aligned.get(i)
+        if j is not None:
+            out.append(gap(previous + 1, j))
+            previous = j
+        out.append(char)
+    out.append(gap(previous + 1, len(polished)))
+
+    merged = "".join(out).strip()
+    # Collapse anything the alignment doubled up, e.g. a comma emitted either
+    # side of a character the model had moved.
+    merged = re.sub(f"([{re.escape('，。？！、；：,.?!;:')}])[，、,；;]+", r"\1", merged)
+
+    # If the model gave us less punctuation than Whisper already had, its output
+    # was not worth having. Whisper's Chinese punctuation is sparse but real.
+    if _punctuation_count(merged) < _punctuation_count(raw):
+        return raw
+    return merged
+
+
+def _punctuation_count(text: str) -> int:
+    return sum(1 for c in text if _is_ignorable(c) and not c.isspace())
 
 
 class LlmError(RuntimeError):
@@ -285,9 +370,16 @@ def safe_polish(
     # 铁律 10, enforced rather than requested. Measured on a real model with a
     # prompt that forbids this in bold: medium dropped 「因为」 from a sentence
     # and heavy reordered a clause. Both read beautifully. That is the danger.
-    changed = content_changed(text, result)
-    if changed is not None:
-        log.warning("polish changed the content (%s), keeping the raw transcript", changed)
+    # Merge rather than judge. The model's punctuation is taken; its edits to
+    # the words are discarded, whatever they were.
+    attempted = content_changed(text, result)
+    if attempted is not None:
+        # Still worth saying out loud — it is how we learn what these models do
+        # to an argument when told not to. It is no longer a failure.
+        log.info("polish tried to change the content (%s); kept the transcript's words", attempted)
+    result = apply_punctuation(text, result)
+
+    if result == text:
         return text, False
 
     if level in ("medium", "heavy"):
