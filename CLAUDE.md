@@ -86,43 +86,40 @@ uv pip install --python ~/.venvs/utter/bin/python --no-deps -e .
 
 ## 运行
 
-装好后 `utter` 在任何目录都能用（**不要再写 `python -m backend.cli`，那个只在仓库目录内有效**）：
+**日常用：双击 `/Applications/Utter.app`。** 菜单栏常驻，不占 Dock，不需要终端。
+日志在 `~/Utter/utter.log`。
 
 ```bash
-~/.venvs/utter/bin/utter doctor
-~/.venvs/utter/bin/utter models list
-~/.venvs/utter/bin/utter transcribe FILE.wav --mode listen --timing
+# 改了代码之后重新构建
+~/.venvs/utter/bin/python packaging/build_app.py
 
-# 听写。加 --target scratchpad 只暂存不注入
-~/.venvs/utter/bin/utter dictate --timing
+# 只需跑一次：建持久签名证书。不建的话每次重建 macOS 都当成新 app，辅助功能权限会丢
+~/.venvs/utter/bin/python packaging/build_app.py --make-cert
+
+# 开机自启（LaunchAgent，取消用 --no-login-item）
+~/.venvs/utter/bin/python packaging/build_app.py --login-item
 ```
 
-嫌路径长就 `export PATH="$HOME/.venvs/utter/bin:$PATH"`，之后直接敲 `utter`。
+**这个 .app 不是自包含的**：它引用 `~/.venvs/utter`，拷给别人跑不起来。
+原因与分发路线见 `packaging/build_app.py` 的模块注释。
+
+调试仍然走 CLI（`utter` 装好后任何目录可用，**不要写 `python -m backend.cli`**，
+那个只在仓库目录内有效）：
+
+```bash
+~/.venvs/utter/bin/utter doctor          # 这台机器什么能用、什么不能
+~/.venvs/utter/bin/utter dictate --timing # 带耗时报告的听写，方便看每一段花在哪
+~/.venvs/utter/bin/utter mics            # 真的打开每个输入设备，看哪个收得到声音
+~/.venvs/utter/bin/utter key             # 存 API key（只进钥匙串）
+~/.venvs/utter/bin/utter polish '文字'    # 拿真模型验证润色提示词
+~/.venvs/utter/bin/utter polish --benchmark  # 这把 key 能用的模型，逐个计时
+~/.venvs/utter/bin/utter sessions --list # 存档有多大、清理旧的
+```
 
 ```bash
 # 测试（要在仓库目录内跑）。默认跳过联网与真模型；全跑加 -m ""
 ~/.venvs/utter/bin/python -m pytest -q
 ```
-
-## 运行方式（2026-08-11 起）
-
-**双击 `/Applications/Utter.app`。** 菜单栏常驻，不占 Dock，不需要终端。
-
-```bash
-# 重新构建（改了代码之后）
-~/.venvs/utter/bin/python packaging/build_app.py
-
-# 只需跑一次：建持久签名证书，否则每次重建都会丢辅助功能权限
-~/.venvs/utter/bin/python packaging/build_app.py --make-cert
-
-# 开机自启
-~/.venvs/utter/bin/python packaging/build_app.py --login-item
-```
-
-日志在 `~/Utter/utter.log`。CLI（`utter dictate` 等）仍然可用，调试时更方便。
-
-**这个 .app 不是自包含的**：它引用 `~/.venvs/utter`，不能拷给别人。原因和
-分发路线见 `packaging/build_app.py` 的模块注释。
 
 **v1 的 Tauri 界面跑不起来，这是有意的。** v1 的后端服务器（`backend/main.py` 及
 `session` / `transcriber` / `translator` / `audio_capture`）2026-08-10 已删除——它走的是被
@@ -133,7 +130,7 @@ v3 设计 §7 说那部分设计有效，是 P3 的起点。
 
 ## 状态
 
-当前在 `v3` 分支。551 个测试通过，无豁免、无 xfail。
+当前在 `v3` 分支。618 个测试通过，无豁免、无 xfail。
 
 - **P1 共享核心已验收**（2026-08-10）：provider 抽象、硬件探测、档位 catalog、模型下载器、
   VAD、配置与钥匙串、五槽管线、CLI。每句转录中位 1.18s、占空比 29%。
@@ -143,8 +140,8 @@ v3 设计 §7 说那部分设计有效，是 P3 的起点。
 - **P4 打包已完成**（2026-08-11）：`/Applications/Utter.app`，菜单栏常驻、可开机自启。
 - **P2a 听写 6/8 完成**：麦克风、热键（左 Option 按住 / 双击左 Control 开关）、埋点计时、
   暂存模式、光标注入、常驻 daemon、菜单栏 + 浮窗，全部真机验证。端到端 968–1053ms。
-  待办：Task 7 应用兼容表（需真机逐个 app 试注入）、Task 8 润色接线（**需作者先存 API key**；
-  作者已定：用托管 API 的免费模型，不用本地 Ollama）。
+  **Task 8 润色已完成**（2026-08-11）：OpenAI `gpt-5.4-mini`，key 在钥匙串里。
+  待办只剩 Task 7 应用兼容表 —— 需要真机逐个 app 试注入，只有作者能做。
 - **模型选型已定**（2026-08-10）：默认 **Whisper turbo 自动档**——唯一中英文都拿得下的本地
   模型。SenseVoice 留作纯中文快档，但**它会吞掉中文句子里的英文**，名字里已写明。
   更大的开源模型（FireRedASR2、SenseVoice fp32）都实测更差，已删。
