@@ -71,6 +71,27 @@ class MenuBar:
                     outer.daemon.config.dictate_language = None if value == "auto" else value
                     outer._persist()
 
+                def runDoctor_(self, _sender):
+                    """`utter doctor` in a window.
+
+                    Every diagnostic this project has built lives behind a
+                    terminal command, and the whole point of the .app is that
+                    there is no terminal any more."""
+                    import subprocess, sys
+
+                    from backend.config import DEFAULT_DIR
+
+                    report = DEFAULT_DIR / "doctor.txt"
+                    try:
+                        out = subprocess.run(
+                            [sys.executable, "-m", "backend.cli", "doctor"],
+                            capture_output=True, text=True, timeout=120,
+                        ).stdout
+                        report.write_text(out or "(没有输出)", encoding="utf-8")
+                        subprocess.run(["open", "-t", str(report)], check=False)
+                    except Exception as exc:
+                        outer._notify("自检失败", str(exc)[:120])
+
                 def openArchive_(self, _sender):
                     import subprocess
 
@@ -120,6 +141,27 @@ class MenuBar:
         except Exception:  # pragma: no cover
             log.warning("could not set the menu bar symbol", exc_info=True)
 
+    def _warnings(self, config):
+        """Anything wrong, said in the menu rather than in a log file.
+
+        The microphone being shared with the speakers is the one that has
+        actually bitten: it degrades every transcription and looks like a bad
+        model. It was reported by `utter doctor` and nowhere the author would
+        see it during normal use.
+        """
+        lines = []
+        try:
+            from backend.audio_source import shared_with_output
+
+            shared = shared_with_output(config.input_device)
+            if shared:
+                lines.append(f"⚠ {shared} 同时是麦克风和扬声器 —— 会拖慢开麦、降低识别")
+        except Exception:  # pragma: no cover
+            pass
+        if config.polish_enabled and self.daemon.polish is None:
+            lines.append("⚠ 润色开着但用不了 —— 点这里自检")
+        return lines
+
     def _providers(self):
         """Every engine this build knows about, available ones first."""
         from backend.providers.stt import probe_all
@@ -157,7 +199,18 @@ class MenuBar:
                 item.setEnabled_(enabled)
                 menu.addItem_(item)
 
-            add(f"按住 {config.hotkey_push or '未设置'} 说话", None, False)
+            # Both gestures, because the author kept having to remember which
+            # key did which, and the answer lived only in the startup banner of
+            # a terminal that no longer exists.
+            add(f"按住 {config.hotkey_push or '未设置'}　　说一句", None, False)
+            add(
+                f"双击 {config.hotkey_toggle or '未设置'}　　"
+                f"{'边说边出字' if config.stream_while_speaking else '长段口述'}"
+                "（再双击停）",
+                None, False,
+            )
+            for warning in self._warnings(config):
+                add(warning, "runDoctor:")
             menu.addItem_(AppKit.NSMenuItem.separatorItem())
             add(
                 f"边说边出字：{'开' if config.stream_while_speaking else '关'}"
@@ -231,6 +284,7 @@ class MenuBar:
             menu.addItem_(AppKit.NSMenuItem.separatorItem())
             add(f"本次已听写 {len(self.daemon.scratchpad)} 段", None, False)
             add("打开存档", "openArchive:")
+            add("自检（诊断）…", "runDoctor:")
             add("编辑设置…", "openConfig:")
             menu.addItem_(AppKit.NSMenuItem.separatorItem())
             add("退出 Utter", "quit:")

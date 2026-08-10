@@ -116,3 +116,47 @@ def test_importing_needs_no_appkit():
     top = {a.name for n in tree.body if isinstance(n, ast.Import) for a in n.names}
     top |= {n.module for n in tree.body if isinstance(n, ast.ImportFrom) and n.module}
     assert "AppKit" not in top and "Foundation" not in top
+
+
+# --- the menu bar's warnings ---------------------------------------------------
+
+
+class _FakeDaemon:
+    def __init__(self, config, polish=None):
+        self.config = config
+        self.polish = polish
+
+
+def test_a_shared_microphone_is_warned_about_in_the_menu(monkeypatch):
+    """It degrades every transcription and looks like a bad model. `utter
+    doctor` said so and nothing the author saw during normal use did."""
+    from backend.config import AppConfig
+    from backend.menubar import MenuBar
+
+    monkeypatch.setattr("backend.audio_source.shared_with_output", lambda _d: "AirPods Pro")
+    warnings = MenuBar(_FakeDaemon(AppConfig()))._warnings(AppConfig())
+
+    assert any("AirPods Pro" in w for w in warnings)
+
+
+def test_polish_that_is_on_but_broken_is_warned_about(monkeypatch):
+    from backend.config import AppConfig
+    from backend.menubar import MenuBar
+
+    monkeypatch.setattr("backend.audio_source.shared_with_output", lambda _d: None)
+    config = AppConfig(polish_enabled=True)
+    warnings = MenuBar(_FakeDaemon(config, polish=None))._warnings(config)
+
+    assert any("润色" in w for w in warnings)
+
+
+def test_a_healthy_setup_shows_no_warnings(monkeypatch):
+    """A menu with a permanent warning in it is a menu nobody reads."""
+    from backend.config import AppConfig
+    from backend.menubar import MenuBar
+
+    monkeypatch.setattr("backend.audio_source.shared_with_output", lambda _d: None)
+    config = AppConfig(polish_enabled=True)
+    daemon = _FakeDaemon(config, polish=lambda text, context=None: text)
+
+    assert MenuBar(daemon)._warnings(config) == []

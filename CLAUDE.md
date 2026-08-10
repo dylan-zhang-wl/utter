@@ -104,7 +104,27 @@ uv pip install --python ~/.venvs/utter/bin/python --no-deps -e .
 ~/.venvs/utter/bin/python -m pytest -q
 ```
 
-**图形界面目前跑不起来，这是有意的。** v1 的后端服务器（`backend/main.py` 及
+## 运行方式（2026-08-11 起）
+
+**双击 `/Applications/Utter.app`。** 菜单栏常驻，不占 Dock，不需要终端。
+
+```bash
+# 重新构建（改了代码之后）
+~/.venvs/utter/bin/python packaging/build_app.py
+
+# 只需跑一次：建持久签名证书，否则每次重建都会丢辅助功能权限
+~/.venvs/utter/bin/python packaging/build_app.py --make-cert
+
+# 开机自启
+~/.venvs/utter/bin/python packaging/build_app.py --login-item
+```
+
+日志在 `~/Utter/utter.log`。CLI（`utter dictate` 等）仍然可用，调试时更方便。
+
+**这个 .app 不是自包含的**：它引用 `~/.venvs/utter`，不能拷给别人。原因和
+分发路线见 `packaging/build_app.py` 的模块注释。
+
+**v1 的 Tauri 界面跑不起来，这是有意的。** v1 的后端服务器（`backend/main.py` 及
 `session` / `transcriber` / `translator` / `audio_capture`）2026-08-10 已删除——它走的是被
 实测证伪的旧管线，P3 无论如何都要在 v3 管线上重写。`frontend/src` 的界面组件保留，
 v3 设计 §7 说那部分设计有效，是 P3 的起点。
@@ -117,6 +137,10 @@ v3 设计 §7 说那部分设计有效，是 P3 的起点。
 
 - **P1 共享核心已验收**（2026-08-10）：provider 抽象、硬件探测、档位 catalog、模型下载器、
   VAD、配置与钥匙串、五槽管线、CLI。每句转录中位 1.18s、占空比 29%。
+- **P2b 边说边出字已完成**（2026-08-11）：开关模式下 VAD 按 400ms 停顿切句，
+  逐句转录逐句注入，实测 47 秒音频出 12 段、末句滞后 0.9 秒。受铁律 9 约束：
+  一句只注入一次、永不回改，所以没有"先出草稿再改"。
+- **P4 打包已完成**（2026-08-11）：`/Applications/Utter.app`，菜单栏常驻、可开机自启。
 - **P2a 听写 6/8 完成**：麦克风、热键（左 Option 按住 / 双击左 Control 开关）、埋点计时、
   暂存模式、光标注入、常驻 daemon、菜单栏 + 浮窗，全部真机验证。端到端 968–1053ms。
   待办：Task 7 应用兼容表（需真机逐个 app 试注入）、Task 8 润色接线（**需作者先存 API key**；

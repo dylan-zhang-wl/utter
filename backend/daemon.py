@@ -510,13 +510,20 @@ class DictationDaemon:
             # The streaming reader has been draining the microphone all along
             # and will flush the last clause on its way out. Draining here too
             # would race it and lose whatever it took.
-            self._streaming = False
             if self._stream_stop is not None:
                 self._stream_stop.set()
             if self.overlay is not None:
                 self._level_stop.set()
                 self.overlay.set_state("working", "收尾中")
-            threading.Thread(target=mic.stop, daemon=True, name="utter-mic-close").start()
+            # `_streaming` stays true until the reader has flushed and the
+            # queue has drained, so _process does not start hiding the panel
+            # out from under the clauses still in flight.
+            def finish():
+                self.wait_idle(timeout=30)
+                self._streaming = False
+                mic.stop()
+
+            threading.Thread(target=finish, daemon=True, name="utter-mic-close").start()
             return
 
         chunks = list(mic.chunks())
@@ -596,6 +603,13 @@ class DictationDaemon:
 
         for event in segmenter.flush():
             emit(event)
+
+        # The reader owns the panel for the length of the session, so it is the
+        # one that puts it away — after the worker has drained, or the last
+        # clause would be injected into an empty screen.
+        if self.overlay is not None:
+            self.wait_idle(timeout=30)
+            self.overlay.hide()
         log.info("streaming session ended after %.1fs", time.perf_counter() - started)
 
     def _stream_vad(self):
@@ -694,7 +708,11 @@ class DictationDaemon:
             # an empty transcript both returned early, leaving the panel stuck
             # on 「转录中」 with the bars frozen — which is worse than no overlay
             # at all, because it reports work that is not happening.
-            if self.overlay is not None:
+            #
+            # Except while streaming, where this runs once per clause and the
+            # microphone is still open: hiding here made the panel blink out
+            # mid-sentence and come back, which reads as "it stopped listening".
+            if self.overlay is not None and not self._streaming:
                 self.overlay.hide()
 
     def _process_inner(self, job: _Job) -> None:
