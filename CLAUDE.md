@@ -13,12 +13,14 @@
 | 文档 | 地位 |
 |---|---|
 | [docs/plans/2026-08-09-v3-design.md](docs/plans/2026-08-09-v3-design.md) | **唯一现行设计权威源** |
-| `docs/plans/2026-04-14-livescribe-v2-*.md` | **已作废**。存废清单见 v3 设计 §7 |
-| `docs/plans/2026-04-13-livescribe-*.md` | v1 历史，仅供考古 |
+| [docs/教训与经验.md](docs/教训与经验.md) | **踩过的坑与已知不足**，动手前先看 |
+| `docs/plans/2026-04-14-livescribe-v2-*.md` | 管线部分已作废；**会话模型与 UI 组件那六成仍有效**，P3 照它写。存废清单见 v3 设计 §7 |
 | [docs/benchmarks/](docs/benchmarks/) | 实测数据，架构结论的依据 |
 | [docs/plans/2026-08-10-p1-build-log.md](docs/plans/2026-08-10-p1-build-log.md) | P1 施工日志：自主决定、被推翻的旧说法、待办 |
 
 **不要再提议"执行现成的 v2 计划"。** v2 的 partial 管线已被实测证伪。
+
+v1 的计划文档与后端服务器已于 2026-08-10 删除（git 历史里还在）。
 
 ## 铁律
 
@@ -102,32 +104,29 @@ uv pip install --python ~/.venvs/utter/bin/python --no-deps -e .
 ~/.venvs/utter/bin/python -m pytest -q
 ```
 
-v1 的图形界面（P3 前仍是旧管线）：
+**图形界面目前跑不起来，这是有意的。** v1 的后端服务器（`backend/main.py` 及
+`session` / `transcriber` / `translator` / `audio_capture`）2026-08-10 已删除——它走的是被
+实测证伪的旧管线，P3 无论如何都要在 v3 管线上重写。`frontend/src` 的界面组件保留，
+v3 设计 §7 说那部分设计有效，是 P3 的起点。
 
-```bash
-# 后端（终端 A）
-~/.venvs/utter/bin/python -m backend.main
-# 前端（终端 B）
-cd frontend && npm run tauri dev
-```
-
-> **sidecar 链路目前是断的**，所以必须开两个终端。评估认为这就是 v1 建好后一次都没被用起来的直接原因。修复排在 **P2b**（2026-08-10 从 P4 提前），见 v3 设计 §6、§8。
+听写的界面是 Python/AppKit 写的菜单栏 + 浮窗，随 `utter dictate` 一起起来，不需要 Tauri。
 
 ## 状态
 
-当前在 `v3` 分支。467 个测试通过。
+当前在 `v3` 分支。551 个测试通过，无豁免、无 xfail。
 
 - **P1 共享核心已验收**（2026-08-10）：provider 抽象、硬件探测、档位 catalog、模型下载器、
   VAD、配置与钥匙串、五槽管线、CLI。每句转录中位 1.18s、占空比 29%。
-- **P2a 听写 6/8 完成**：麦克风、热键（右 Option 按住）、埋点计时、暂存模式、光标注入、
-  常驻 daemon 全部就绪并真机验证。端到端 968–1053ms（指定语言时），达标。
-  待办：Task 7 应用兼容表（需真机逐个 app 试注入）、Task 8 润色接线（**需作者先装
-  Ollama 或存 API key**）。
+- **P2a 听写 6/8 完成**：麦克风、热键（左 Option 按住 / 双击左 Control 开关）、埋点计时、
+  暂存模式、光标注入、常驻 daemon、菜单栏 + 浮窗，全部真机验证。端到端 968–1053ms。
+  待办：Task 7 应用兼容表（需真机逐个 app 试注入）、Task 8 润色接线（**需作者先存 API key**；
+  作者已定：用托管 API 的免费模型，不用本地 Ollama）。
+- **模型选型已定**（2026-08-10）：默认 **Whisper turbo 自动档**——唯一中英文都拿得下的本地
+  模型。SenseVoice 留作纯中文快档，但**它会吞掉中文句子里的英文**，名字里已写明。
+  更大的开源模型（FireRedASR2、SenseVoice fp32）都实测更差，已删。
 
 计划见 [P2a 实现计划](docs/plans/2026-08-10-v3-p2a-implementation.md)，
-实测见 [P2a 延迟基准](docs/benchmarks/2026-08-10-p2a-dictation-latency.md)。
-
-**两条只有真机才会暴露的教训，别忘：** ①Whisper 对静音会凭空编出句子，所以转录前必须过
-`vad.has_speech`；②不指定 `dictate_language` 会让延迟翻倍（多一遍语言检测 encoder）。
+实测见 [P2a 延迟基准](docs/benchmarks/2026-08-10-p2a-dictation-latency.md)，
+坑与不足见 [教训与经验](docs/教训与经验.md)。
 
 无远端仓库（作者明示暂缓，勿反复劝）。

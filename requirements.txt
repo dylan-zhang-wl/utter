@@ -56,7 +56,9 @@ httpx>=0.27                 # Ollama's HTTP API
 openai>=1.30                # covers every OpenAI-compatible endpoint (DeepSeek, Groq, ...)
 deep-translator>=1.11       # fallback translation only — no SLA, rate-limited (design §5.2)
 
-# --- backend service (v1, still standing until P3 rewires main.py) -----------
-fastapi>=0.110
-uvicorn>=0.29
-pydantic>=2.6
+# --- config -------------------------------------------------------------------
+# The only thing left of v1's dependency block. fastapi and uvicorn went out
+# with backend/main.py: P3 builds listen mode's server on the v3 pipeline, and
+# carrying a web framework for a server that no longer exists is how a
+# dependency list stops meaning anything.
+pydantic>=2.6                # config schema and validation

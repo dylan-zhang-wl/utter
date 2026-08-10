@@ -23,13 +23,16 @@ PROVIDERS = BACKEND / "providers"
 # 铁律 6 protects against, since the author owns a non-Apple-Silicon machine.
 CONCRETE_BACKENDS = {"mlx_whisper", "faster_whisper", "ctranslate2", "whisper"}
 
-# v1 modules that predate the provider layer. The P1 plan keeps them in place
-# until P3 rewires main.py, so they are grandfathered — but listed here so the
-# debt is visible and shrinks. Deleting an entry must never be needed to make
-# the suite pass; adding one requires a reason in the commit message.
-LEGACY_EXEMPT = {
-    "transcriber.py",  # v1 faster-whisper wrapper, superseded by providers/, removed in P3
-}
+# Empty, and meant to stay that way.
+#
+# This held transcriber.py, v1's faster-whisper wrapper, grandfathered until
+# P3 could rewire main.py. main.py and its whole chain went on 2026-08-10, so
+# 铁律 6 now holds across every file with no exceptions: outside
+# backend/providers/, nothing names a concrete speech backend.
+#
+# Adding an entry back requires a reason in the commit message. Removing one
+# must never be how the suite is made to pass.
+LEGACY_EXEMPT: set[str] = set()
 
 
 def _source_files():
