@@ -47,6 +47,12 @@ class MenuBar:
                     outer.daemon.set_polish(True, str(sender.representedObject()))
                     outer._rebuild()
 
+                def toggleStreaming_(self, _sender):
+                    config = outer.daemon.config
+                    config.stream_while_speaking = not config.stream_while_speaking
+                    outer._persist()
+                    outer._rebuild()
+
                 def toggleTarget_(self, _sender):
                     current = outer.daemon.config.dictate_target
                     outer.daemon.config.dictate_target = (
@@ -153,6 +159,11 @@ class MenuBar:
 
             add(f"按住 {config.hotkey_push or '未设置'} 说话", None, False)
             menu.addItem_(AppKit.NSMenuItem.separatorItem())
+            add(
+                f"边说边出字：{'开' if config.stream_while_speaking else '关'}"
+                f"（{config.hotkey_toggle or '未设置'} 双击）",
+                "toggleStreaming:",
+            )
             add(
                 f"润色：{'开（' + config.polish_level + '）' if config.polish_enabled else '关'}",
                 "togglePolish:",

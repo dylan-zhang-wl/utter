@@ -109,6 +109,30 @@ class AppConfig(BaseModel):
     # brushing the key silently starts recording everything said next. macOS uses
     # a double tap for its own dictation shortcut for the same reason.
     hotkey_toggle_double_tap: bool = True
+
+    # 边说边出字, on the toggle gesture only (P2b, design §4.1a).
+    #
+    # Bounded by 铁律 9: injected text is never revised, so there is no live
+    # caption being corrected — each clause is transcribed once its pause has
+    # arrived and lands final. Push-to-talk is unaffected: the finger is
+    # already the segmenter there.
+    stream_while_speaking: bool = True
+
+    # Where to cut, measured on the author's own dictation 2026-08-11. The
+    # numbers matter more than they look:
+    #
+    #   600ms (listen mode's value)  ->  2 segments in 47s, both force-cuts
+    #   400ms                        -> 12 segments of 3.3-5.4s   <- sentences
+    #   250ms                        -> 25 segments, many under a second
+    #
+    # 600 asks "is this utterance over"; a fluent speaker never pauses that
+    # long mid-paragraph, so nothing appeared until the 30-second ceiling fired.
+    # 400 asks "did a clause just end", which is the question streaming needs.
+    stream_silence_ms: int = 400
+    # And a ceiling, so a speaker who never pauses still sees text. Ten seconds
+    # rather than listen mode's thirty: three sentences behind is already too
+    # far to feel live.
+    stream_max_seconds: int = 10
     # Whisper does not close a sentence when the audio stops mid-breath, which
     # is every push-to-talk release. One utterance in seven came back with any
     # end punctuation at all. Off if you dictate one sentence across several

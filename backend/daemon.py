@@ -11,10 +11,17 @@ stall key delivery for the whole system, so utterances go onto a queue and a
 single worker drains it. Single, not a pool: 铁律 9 means text is delivered once
 and never revised, so it has to be delivered in order.
 
-Push-to-talk sends the whole held buffer as one utterance — the finger is the
-segmenter, and no VAD is involved. Toggle mode works here too but still only
-transcribes when you stop; streaming a long dictation clause by clause is P2b
-(design §4.1a), and needs the paragraph batching and overlay that go with it.
+Two gestures, two shapes. Push-to-talk sends the whole held buffer as one
+utterance — the finger is the segmenter, and no VAD is involved. The toggle
+streams: the microphone stays open and silero cuts it at the author's own
+pauses, so each clause is transcribed and injected while the next is still
+being spoken (P2b, design §4.1a).
+
+Streaming is bounded by 铁律 9 — injected text is never revised — so there are
+no partial hypotheses to correct. A clause is transcribed only after its pause
+has arrived, and what lands in the document is final. Both shapes share the one
+queue and the one worker, which is what keeps 铁律 11 true without any extra
+machinery.
 """
 
 from __future__ import annotations
@@ -167,6 +174,9 @@ class DictationDaemon:
     _locked_at_press: str | None = field(init=False, default=None)
     _level_stop: threading.Event = field(init=False, default_factory=threading.Event)
     _pressed_at: float | None = field(init=False, default=None)
+    _stream_stop: threading.Event | None = field(init=False, default=None)
+    _stream_vad_session: object | None = field(init=False, default=None)
+    _streaming: bool = field(init=False, default=False)
 
     def __post_init__(self):
         if self.injector is None:
@@ -336,6 +346,7 @@ class DictationDaemon:
         "dictate_target",
         "polish_enabled",
         "polish_level",
+        "stream_while_speaking",
     )
 
     def _save_config(self) -> None:
@@ -418,15 +429,22 @@ class DictationDaemon:
 
     def _on_hotkey(self, event: HotkeyEvent) -> None:
         if event.kind == "start":
-            self.begin_utterance(at=event.at)
+            # Streaming belongs to the toggle gesture only. Push-to-talk means
+            # "this phrase, now" and the finger is already the segmenter; the
+            # toggle is the one used for a paragraph, which is where waiting
+            # until the end is the thing that hurts.
+            self.begin_utterance(at=event.at, stream=event.mode != "push")
         else:
             self.end_utterance(at=event.at)
 
-    def begin_utterance(self, at: float | None = None) -> None:
+    def begin_utterance(self, at: float | None = None, stream: bool | None = None) -> None:
         if self._mic is not None:
             return  # key repeat, or a second press before the first was released
 
         self._pressed_at = at if at is not None else time.perf_counter()
+        # `stream` says whether the gesture supports it; the config says
+        # whether the author wants it. Both have to agree.
+        self._streaming = bool(stream) and bool(self.config.stream_while_speaking)
 
         # The microphone goes first, ahead of everything else this method does.
         #
@@ -470,6 +488,13 @@ class DictationDaemon:
             threading.Thread(target=self._pump_levels, args=(stop,), daemon=True,
                              name="utter-levels").start()
 
+        if self._streaming and self._mic is not None:
+            self._stream_stop = threading.Event()
+            threading.Thread(
+                target=self._stream_utterances, args=(self._stream_stop,),
+                daemon=True, name="utter-stream",
+            ).start()
+
     def end_utterance(self, at: float | None = None) -> None:
         mic, self._mic = self._mic, None
         if mic is None:
@@ -480,30 +505,126 @@ class DictationDaemon:
         # 130ms. Closing first put all of that on the user's critical path for
         # no reason — the audio is already in hand by then.
         released = at if at is not None else time.perf_counter()
+
+        if self._streaming:
+            # The streaming reader has been draining the microphone all along
+            # and will flush the last clause on its way out. Draining here too
+            # would race it and lose whatever it took.
+            self._streaming = False
+            if self._stream_stop is not None:
+                self._stream_stop.set()
+            if self.overlay is not None:
+                self._level_stop.set()
+                self.overlay.set_state("working", "收尾中")
+            threading.Thread(target=mic.stop, daemon=True, name="utter-mic-close").start()
+            return
+
         chunks = list(mic.chunks())
         if chunks:
-            job = _Job(
-                index=self._index,
-                audio=np.concatenate(chunks),
+            self._enqueue(
+                np.concatenate(chunks),
                 started_at=released,
+                held=(released - self._pressed_at) if self._pressed_at is not None else None,
                 dropped=getattr(mic, "dropped", 0),
                 overflows=getattr(mic, "overflows", 0),
-                held=(released - self._pressed_at) if self._pressed_at is not None else None,
                 mic_open=(
                     (mic.first_chunk_at - self._pressed_at) * 1000
                     if getattr(mic, "first_chunk_at", None) and self._pressed_at is not None
                     else None
                 ),
             )
-            self._index += 1
-            self._idle.clear()
-            self._queue.put(job)
 
         if self.overlay is not None:
             self._level_stop.set()
             self.overlay.set_state("working", "转录中")
 
         threading.Thread(target=mic.stop, daemon=True, name="utter-mic-close").start()
+
+    # -- streaming (P2b) --
+
+    def _stream_utterances(self, stop: threading.Event) -> None:
+        """Cut the live microphone at pauses and send each clause on as it ends.
+
+        This is 边说边出字, and the shape is forced by 铁律 9: text that has been
+        injected is never revised. So there is no draft to correct later — a
+        clause is transcribed only once its pause has arrived, and what lands in
+        the document is final. What the author gets is not a live caption; it is
+        their sentences appearing one behind the other, a beat late.
+
+        The alternative shape — stream partial hypotheses and rewrite them —
+        was ruled out on day one. It would mean the tool editing a document the
+        author is also editing.
+
+        Same queue and same single worker as push-to-talk, so 铁律 11 holds
+        without extra machinery: clauses are transcribed, polished and injected
+        strictly in the order they were spoken.
+
+        The segmenter is P1's, unchanged. faster-whisper-dictation arrived at
+        the same architecture independently — silero for boundaries, one whole
+        utterance per model call — which is some comfort that it is the obvious
+        answer rather than a clever one.
+        """
+        segmenter = VadSegmenter(
+            # Deliberately NOT vad_silence_ms / max_utterance_sec: those answer
+            # "is the utterance over", and measured on 47 seconds of real
+            # dictation they produced two segments, both of them the 30-second
+            # force-cut. See config.stream_silence_ms for the sweep.
+            vad_silence_ms=self.config.stream_silence_ms,
+            vad_sensitivity=self.config.vad_sensitivity,
+            max_utterance_sec=self.config.stream_max_seconds,
+            speech_prob=self._stream_vad().speech_prob,
+        )
+        started = time.perf_counter()
+
+        def emit(event) -> None:
+            if not isinstance(event, SpeechEnd) or not len(event.audio):
+                return
+            self._enqueue(event.audio, started_at=time.perf_counter(), held=None)
+            if self.overlay is not None:
+                # A clause just left for the model; say so, then go back to
+                # listening, because the microphone is still open.
+                self.overlay.set_state("working", "出字中")
+
+        while not stop.is_set():
+            mic = self._mic
+            if mic is None:
+                break
+            for chunk in mic.chunks():
+                for event in segmenter.feed(chunk):
+                    emit(event)
+            time.sleep(0.05)
+
+        for event in segmenter.flush():
+            emit(event)
+        log.info("streaming session ended after %.1fs", time.perf_counter() - started)
+
+    def _stream_vad(self):
+        """A silero session of its own.
+
+        Not `self._vad`: that one is reset by the speech gate on the worker
+        thread for every utterance, and resetting a VAD mid-sentence while it
+        is segmenting a live stream loses the boundary it was in the middle of
+        finding.
+        """
+        if self._stream_vad_session is None:
+            self._stream_vad_session = SileroVad()
+        self._stream_vad_session.reset()
+        return self._stream_vad_session
+
+    def _enqueue(self, audio: np.ndarray, *, started_at: float, held: float | None,
+                 dropped: int = 0, overflows: int = 0, mic_open: float | None = None) -> None:
+        job = _Job(
+            index=self._index,
+            audio=audio,
+            started_at=started_at,
+            dropped=dropped,
+            overflows=overflows,
+            held=held,
+            mic_open=mic_open,
+        )
+        self._index += 1
+        self._idle.clear()
+        self._queue.put(job)
 
     def _pump_levels(self, stop: threading.Event) -> None:
         """Drive the overlay at ~25fps while the key is held.
