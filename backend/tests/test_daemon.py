@@ -583,3 +583,17 @@ def test_primer_and_vocabulary_combine():
     prompt = stt.calls[-1]["prompt"]
     assert "简体中文" in prompt and "semiotic" in prompt and "符号" in prompt
     d.stop()
+
+
+def test_punctuation_width_is_normalised(monkeypatch):
+    """The author's "中英文之间的标点区分不明显". Mechanical, before anything
+    else sees the text, and it never touches a word."""
+    stt = FakeStt(texts=["他说,I want to demonstrate，and then 他停下了."])
+    d = build(stt=stt)
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    assert d.scratchpad.entries[0].text == "他说，I want to demonstrate, and then 他停下了。"
+    d.stop()

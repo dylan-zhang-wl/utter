@@ -34,6 +34,7 @@ from backend.config import AppConfig
 from backend.hotkey import HotkeyError, HotkeyEvent, HotkeyListener
 from backend.injection import Injector
 from backend.pipeline import Utterance
+from backend.punctuation import normalise as normalise_punctuation
 from backend.scratchpad import Scratchpad, SessionArchive
 from backend.timing import Stopwatch
 from backend.vad import SAMPLE_RATE, SileroVad, has_speech
@@ -310,7 +311,11 @@ class DictationDaemon:
             self.last_timing = watch
             return
 
-        raw = (raw or "").strip()
+        # Mechanical, and applied before anything else sees the text: only the
+        # width of punctuation changes, never a word. Whisper does not hold one
+        # punctuation style across a code-switch, so a bilingual sentence comes
+        # back with Chinese commas after English clauses.
+        raw = normalise_punctuation((raw or "").strip())
         if not raw:
             self.last_timing = watch
             return
