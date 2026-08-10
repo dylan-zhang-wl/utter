@@ -53,7 +53,13 @@ _TAGS = re.compile(r"<\|[^|]*\|>")
 
 class SenseVoiceProvider:
     id = "sensevoice"
-    display_name = "SenseVoice (CJK, ONNX)"
+    # The name has to carry the warning, because the failure is invisible.
+    # Measured 2026-08-10: in a Chinese sentence with English terms in it,
+    # SenseVoice does not mis-hear the English — it *deletes* it. 「literature
+    # review」 came back as 「re盖」 and 「literature matrix」 as nothing at all.
+    # A menu entry reading "SenseVoice (CJK)" invites the author to pick the
+    # fast one and lose their terminology without ever seeing a gap.
+    display_name = "SenseVoice（中文快，但会吞掉英文）"
 
     def __init__(self, hardware=None, use_itn: bool = True, threads: int = 4):
         self._hardware = hardware

@@ -256,3 +256,72 @@ close），每轮都录到 7.9/8.0 秒，`overflows=0`、`dropped=0`。
   显示过——正是本项目反复承诺不做的那种静默丢失。
 
 三条合起来，下一次复现就能一眼分清是「录音丢了」「按着没说话」还是「模型吃掉了」。
+
+## 「有没有更大更好的 SenseVoice？」——查过了，没有（2026-08-10）
+
+作者问：既然 SenseVoice 只有 600 多兆、而且下的是轻量档，有没有大一点、英文好一点
+的版本？如果有，就只留它、把 Whisper 删掉。
+
+三条都查了、都测了，答案都是否定的。
+
+### 1. SenseVoice-Large 没有开放权重
+
+[FunAudioLLM 的 HF 主页](https://huggingface.co/FunAudioLLM)只有 `SenseVoiceSmall`
+（及其 GGUF）。论文里的 Large 只在阿里云 API 上，没有可下载的权重。**所谓「换个大档」
+在本地这条路上不存在。**
+
+### 2. 不是量化的锅：全精度权重一模一样，还慢一倍
+
+同一个 repo 里躺着未量化的 `model.onnx`（938MB，我们用的 int8 是 239MB）。下下来
+一测：
+
+| | 英文 14.8s | 中英混 18.8s |
+|---|---|---|
+| int8 239MB | 213ms | 275ms |
+| fp32 938MB | 498ms | 635ms |
+
+输出**逐字相同的错**——`Liature review`、`Forization`、`Chriss and Van Leon`。
+量化没伤到它，**是这个 234M 参数的模型本身英文就弱**。938MB 已删。
+
+### 3. 一个更要命的发现：中文句子里的英文，它不是听错，是删掉
+
+这条比「英文差」严重得多。测试句：
+
+> 我这一节想写的是 literature review，大概在 2.1 的位置。然后我会做一个
+> literature matrix，把 Kress 和 van Leeuwen 的 semiotic resource 放进去。
+
+SenseVoice 交出：
+
+> 我这一节想写的是**re盖**在2.1的位置，然后我会做一个**把ro和放进去**……
+
+`literature review` 塌成「re盖」，`literature matrix` **整个消失**，
+`Kress 和 van Leeuwen 的 semiotic resource` 只剩「把ro和放进去」。
+
+**这是静默丢失**——中文读着通顺，英文术语没了，作者事后不会发现。对一个英文几乎
+全是术语的使用者，这一条单独就足以否掉它作默认档。provider 的 `display_name`
+因此改成「SenseVoice（中文快，但会吞掉英文）」：菜单必须把代价写在名字上。
+
+### 4. 更大的开源模型试过了，更差
+
+sherpa-onnx 1.13.4 已内建 `from_qwen3_asr` / `from_fire_red_asr_ctc` /
+`from_funasr_nano` 等十几个加载器（全部 onnxruntime，不碰 torch）。挑了最对口的
+一个实测：**FireRedASR2-CTC zh_en int8**（778MB，专为中英训练，且是 CTC 非自回归，
+理论上该很快）。
+
+| 引擎 | 英文术语 | 中英混说 | 纯中文 47s | 速度（每秒音频） |
+|---|---|---|---|---|
+| SenseVoice int8 239MB | 差 | **吞掉英文** | 好，有标点 | **14–20ms** |
+| FireRedASR2-CTC 778MB | 中（全大写、无标点） | 乱码 | **无标点** | 151–174ms |
+| **Whisper turbo 1.6GB 自动** | **全对** | 英文在（有拼写偏差） | 好 | 90–146ms |
+
+Whisper 那句英文一字不差：
+
+> Antigravity. Section 2.1. Literature Review. I will build a literature matrix.
+> Foreignization and domestication are Venuti's terms in translation studies.
+> The semiotic resource has a meaning potential that Kress and Van Leeuwen describe.
+
+Venuti、Kress、Van Leeuwen 全中。FireRed 比 SenseVoice 英文好一点，但**比 Whisper
+还慢，中文没标点，英文全大写**——三头不占。742MB 已删。
+
+**结论：Whisper turbo 自动档是唯一能同时拿下两种语言的本地模型，删不得。**
+SenseVoice 留作纯中文快档，代价写进名字里。
