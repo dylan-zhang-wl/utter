@@ -35,6 +35,9 @@ class FakeMic:
 
 
 class FakeStt:
+    id = "fake"
+    display_name = "Fake STT"
+
     def __init__(self, texts=None, fail=False):
         self.texts = list(texts or ["Translation is rewriting."])
         self.calls = []
@@ -743,3 +746,41 @@ def test_clause_split_uses_a_shorter_silence_than_utterance_split():
     from backend.config import AppConfig
 
     assert daemon_mod.CLAUSE_SILENCE_MS < AppConfig().vad_silence_ms
+
+
+def test_switching_provider_persists_the_choice(monkeypatch, tmp_path):
+    """The menu's first version mutated the in-memory config and nothing else,
+    so every setting reverted on restart — v1's fake Save button, rebuilt."""
+    from backend import config as cfg
+    from backend.providers import stt as stt_mod
+
+    class Other(FakeStt):
+        id = "sensevoice"
+        display_name = "SenseVoice"
+
+    monkeypatch.setattr(stt_mod, "get_stt_provider", lambda **kw: Other())
+    saved = {}
+    monkeypatch.setattr(cfg, "save", lambda c, base_dir=None: saved.update(id=c.stt_provider))
+
+    d = build()
+    d.start()
+    ok, _ = d.switch_provider("sensevoice")
+
+    assert ok is True
+    assert d.stt.id == "sensevoice"
+    assert saved["id"] == "sensevoice", "the choice must survive a restart"
+    d.stop()
+
+
+def test_switching_to_an_unavailable_provider_keeps_the_old_one(monkeypatch):
+    from backend.providers import stt as stt_mod
+
+    original = FakeStt()
+    monkeypatch.setattr(stt_mod, "get_stt_provider", lambda **kw: FakeStt())
+    d = build(stt=original)
+    d.start()
+    ok, message = d.switch_provider("nonexistent")
+
+    assert ok is False and "不可用" in message
+    assert d.stt is original, "a failed switch must not leave the daemon engineless"
+    d.stop()

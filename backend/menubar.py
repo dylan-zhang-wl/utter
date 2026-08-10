@@ -38,14 +38,25 @@ class MenuBar:
             class _Delegate(AppKit.NSObject):
                 def togglePolish_(self, _sender):
                     outer.daemon.config.polish_enabled = not outer.daemon.config.polish_enabled
-                    outer._rebuild()
+                    outer._persist()
 
                 def toggleTarget_(self, _sender):
                     current = outer.daemon.config.dictate_target
                     outer.daemon.config.dictate_target = (
                         "scratchpad" if current == "cursor" else "cursor"
                     )
+                    outer._persist()
+
+                def pickModel_(self, sender):
+                    ok, message = outer.daemon.switch_provider(str(sender.representedObject()))
+                    if not ok:
+                        outer._notify("换不了模型", message)
                     outer._rebuild()
+
+                def pickLanguage_(self, sender):
+                    value = str(sender.representedObject())
+                    outer.daemon.config.dictate_language = None if value == "auto" else value
+                    outer._persist()
 
                 def openArchive_(self, _sender):
                     import subprocess
@@ -96,6 +107,27 @@ class MenuBar:
         except Exception:  # pragma: no cover
             log.warning("could not set the menu bar symbol", exc_info=True)
 
+    def _providers(self):
+        """Every engine this build knows about, available ones first."""
+        from backend.providers.stt import probe_all
+
+        return [
+            (s.id, s.display_name if s.available else f"{s.display_name}（不可用）")
+            for s in probe_all()
+        ]
+
+    def _persist(self) -> None:
+        self.daemon._save_config()
+        self._rebuild()
+
+    def _notify(self, title: str, body: str) -> None:
+        import subprocess
+
+        subprocess.run(
+            ["osascript", "-e", f"display notification {body!r} with title {title!r}"],
+            check=False, capture_output=True, timeout=5,
+        )
+
     def _rebuild(self) -> None:
         try:
             import AppKit
@@ -115,6 +147,40 @@ class MenuBar:
             add(f"按住 {config.hotkey_push or '未设置'} 说话", None, False)
             menu.addItem_(AppKit.NSMenuItem.separatorItem())
             add(f"润色：{'开' if config.polish_enabled else '关'}", "togglePolish:")
+
+            # Switching engines and languages is the whole comparison the author
+            # is running. Making it cost a terminal visit is how a comparison
+            # quietly does not get run.
+            models = AppKit.NSMenu.alloc().init()
+            for pid, label in self._providers():
+                item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    label, "pickModel:", ""
+                )
+                item.setTarget_(self._delegate)
+                item.setRepresentedObject_(pid)
+                item.setState_(1 if getattr(self.daemon.stt, "id", "") == pid else 0)
+                models.addItem_(item)
+            holder = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                f"模型：{getattr(self.daemon.stt, 'display_name', '?')}", None, ""
+            )
+            menu.addItem_(holder)
+            menu.setSubmenu_forItem_(models, holder)
+
+            languages = AppKit.NSMenu.alloc().init()
+            for value, label in (("auto", "自动检测"), ("zh", "中文"), ("en", "English")):
+                item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    label, "pickLanguage:", ""
+                )
+                item.setTarget_(self._delegate)
+                item.setRepresentedObject_(value)
+                current = config.dictate_language or "auto"
+                item.setState_(1 if current == value else 0)
+                languages.addItem_(item)
+            holder = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                f"语言：{config.dictate_language or '自动'}", None, ""
+            )
+            menu.addItem_(holder)
+            menu.setSubmenu_forItem_(languages, holder)
             add(
                 f"输出：{'光标处' if config.dictate_target == 'cursor' else '暂存区'}",
                 "toggleTarget:",

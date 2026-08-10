@@ -236,6 +236,45 @@ class DictationDaemon:
         while not stopping.wait(0.2):
             pass
 
+    def switch_provider(self, provider_id: str) -> tuple[bool, str]:
+        """Change engine without restarting. Returns (worked, message).
+
+        Comparing two models means running the same sentences through both, and
+        anything that makes switching cost a restart makes that comparison not
+        happen. The daemon holds one reference; replacing it is enough because
+        nothing else in the process knows which engine is in use.
+        """
+        from backend.providers.stt import get_stt_provider
+
+        try:
+            provider = get_stt_provider(preferred=provider_id)
+        except Exception as exc:
+            return False, str(exc)
+
+        if provider.id != provider_id:
+            return False, f"{provider_id} 不可用，仍在用 {provider.id}"
+
+        self.stt = provider
+        self.config.stt_provider = provider_id
+        self._save_config()
+        self._warm_up()
+        log.info("switched to %s", provider.display_name)
+        return True, provider.display_name
+
+    def _save_config(self) -> None:
+        """Persist whatever the menu just changed.
+
+        The first version of the menu mutated the in-memory config and nothing
+        else, so every setting silently reverted on restart — the same illusion
+        v1's Settings page created, rebuilt by hand.
+        """
+        try:
+            from backend.config import save
+
+            save(self.config)
+        except Exception:
+            log.warning("could not save the config", exc_info=True)
+
     def _warm_up(self) -> None:
         """Pay the model load now, so the author's first sentence does not.
 
