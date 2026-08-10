@@ -76,10 +76,12 @@ class NoProviderAvailable(RuntimeError):
         super().__init__(f"no speech-to-text provider is available — {detail}")
 
 
+# SenseVoice sits behind Whisper for now — it is a candidate under comparison,
+# not yet a default. Choose it explicitly with stt_provider="sensevoice".
 _PREFERENCE: dict[HardwareKind, tuple[str, ...]] = {
-    "apple_silicon": ("mlx", "faster", "cloud"),
-    "cuda": ("faster", "mlx", "cloud"),
-    "cpu": ("faster", "mlx", "cloud"),
+    "apple_silicon": ("mlx", "faster", "sensevoice", "cloud"),
+    "cuda": ("faster", "mlx", "sensevoice", "cloud"),
+    "cpu": ("faster", "sensevoice", "mlx", "cloud"),
 }
 
 
@@ -98,6 +100,7 @@ def default_providers() -> list[SttProvider]:
     for module_name, class_name in (
         ("backend.providers.mlx", "MlxWhisperProvider"),
         ("backend.providers.faster", "FasterWhisperProvider"),
+        ("backend.providers.sensevoice", "SenseVoiceProvider"),
     ):
         try:
             module = __import__(module_name, fromlist=[class_name])

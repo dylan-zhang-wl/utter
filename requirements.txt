@@ -27,6 +27,12 @@ soundfile>=0.12             # wav I/O for the CLI and fixtures
 mlx-whisper>=0.4.3 ; sys_platform == "darwin" and platform_machine == "arm64"
 faster-whisper>=1.0         # CTranslate2 — CPU and CUDA. No torch.
 
+# SenseVoice, via sherpa-onnx rather than the official funasr — that one
+# declares 71 dependencies including torch, which 铁律 5 rules out. sherpa-onnx
+# has one dependency and no torch, and the int8 weights are 228MB against
+# Whisper turbo's 1.6GB.
+sherpa-onnx>=1.13
+
 # --- voice activity detection ------------------------------------------------
 # silero VAD as ONNX weights. Never `pip install silero-vad`: that one drags in
 # 328M of torch for a 2M model (铁律 5).
