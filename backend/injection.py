@@ -28,9 +28,23 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import time
 from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
+
+
+# How long to wait after ⌘V before putting the user's clipboard back.
+#
+# ⌘V only *posts* a keystroke. The target application reads the pasteboard some
+# milliseconds later, on its own event loop. Restoring immediately after the
+# post — which is what the first version did — means the application reads
+# whatever was there before, and the author watched a previously-copied shell
+# command appear where their dictation should have been.
+#
+# 250ms is chosen to be comfortably longer than an application's event-loop
+# turn while staying invisible next to the ~1.1s the transcription already took.
+PASTE_SETTLE_SECONDS = 0.25
 
 
 @dataclass(frozen=True)
@@ -264,6 +278,9 @@ class Injector:
         try:
             self.pasteboard.set_text(text)
             self.keyboard.paste()
+            # Let the application actually read the pasteboard before taking it
+            # away again. See PASTE_SETTLE_SECONDS.
+            self.settle()
             return InjectionResult(injected=True)
         except Exception as exc:
             log.warning("paste failed", exc_info=True)
@@ -276,6 +293,10 @@ class Injector:
                     self.pasteboard.restore(saved)
                 except Exception:  # pragma: no cover
                     log.warning("could not restore the clipboard", exc_info=True)
+
+    def settle(self) -> None:
+        """Overridable so tests do not spend a quarter second each."""
+        time.sleep(PASTE_SETTLE_SECONDS)
 
     def _fall_back_to_clipboard(self, text: str) -> InjectionResult:
         """Design §4.1c line 3. The target is gone; leave the words somewhere

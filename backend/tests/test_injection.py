@@ -65,6 +65,12 @@ def rig(monkeypatch):
     monkeypatch.setattr(injection, "_notify", lambda title, body: state["notes"].append(body))
 
     injector = injection.Injector(pasteboard=board, keyboard=keys)
+    order = []
+    board.restore = lambda snap, _o=order, _b=board: (_o.append("restore"),
+                                                      FakePasteboard.restore(_b, snap))[1]
+    keys.paste = lambda _o=order, _k=keys: (_o.append("paste"), setattr(_k, "pastes", _k.pastes + 1))
+    injector.settle = lambda _o=order: _o.append("settle")
+    state["order"] = order
     return injector, board, keys, state
 
 
@@ -330,3 +336,25 @@ def test_the_rejection_is_still_explained_in_the_source():
     this module by reaching for the API that looks more direct."""
     source = open(injection.__file__).read()
     assert "CGEventPostToPid" in source, "keep the explanation, just never call it"
+
+
+# --- the paste/restore race (reported 2026-08-10) ----------------------------
+
+
+def test_the_clipboard_is_restored_only_after_the_paste_settles(rig):
+    """⌘V only posts a keystroke; the application reads the pasteboard some
+    milliseconds later on its own event loop.
+
+    Restoring straight after the post meant the application read what was there
+    *before* — the author watched a previously-copied shell command appear where
+    their dictation should have been.
+    """
+    injector, board, keys, state = rig
+    injector.lock_target()
+    injector.inject(0, "the dictated text")
+
+    assert state["order"] == ["paste", "settle", "restore"]
+
+
+def test_settle_waits_long_enough_to_outlast_an_event_loop_turn():
+    assert injection.PASTE_SETTLE_SECONDS >= 0.15
