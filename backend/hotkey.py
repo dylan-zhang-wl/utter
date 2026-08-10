@@ -32,8 +32,12 @@ from pynput import keyboard
 
 log = logging.getLogger(__name__)
 
-Mode = Literal["push", "toggle"]
-MODES = ("push", "toggle")
+Mode = Literal["push", "toggle", "double_toggle"]
+MODES = ("push", "toggle", "double_toggle")
+
+# How close two presses must be to count as a double tap. 400ms is the interval
+# macOS itself uses for its double-tap dictation shortcut.
+DOUBLE_TAP_SECONDS = 0.4
 
 SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
@@ -159,6 +163,12 @@ class HotkeyMatcher:
         self._held: set = set()
         self._engaged = False  # combination currently satisfied
         self._active = False  # dictation currently running
+        # -inf, not 0.0: a zero would sit within the double-tap window of any
+        # clock that happens to start near zero, making the very first single
+        # tap fire. Real perf_counter values are large enough that it never
+        # showed up in use, which is exactly the kind of bug that surfaces on
+        # someone else's machine.
+        self._last_tap = float("-inf")
 
     def _satisfied(self) -> bool:
         return all(slot & self._held for slot in self.slots)
@@ -182,8 +192,10 @@ class HotkeyMatcher:
         self._engaged = True
         if self.mode == "push":
             self._start()
-        else:
+        elif self.mode == "toggle":
             self._stop() if self._active else self._start()
+        else:
+            self._double_tap()
 
     def release(self, key) -> None:
         self._held.discard(key)
@@ -194,6 +206,21 @@ class HotkeyMatcher:
         if self.mode == "push" and self._active:
             # The release is the end of the utterance.
             self._stop()
+
+    def _double_tap(self) -> None:
+        """Two presses inside the window flip the state; a single press does nothing.
+
+        Single-press toggle on a bare modifier is a trap: right Option is a key
+        people brush against, and an accidental toggle silently starts recording
+        everything said next. A double tap is essentially never accidental,
+        which is why macOS uses one for its own dictation shortcut.
+        """
+        now = time.perf_counter()
+        if now - self._last_tap <= DOUBLE_TAP_SECONDS:
+            self._last_tap = float("-inf")
+            self._stop() if self._active else self._start()
+        else:
+            self._last_tap = now
 
     def _start(self) -> None:
         self._active = True

@@ -62,12 +62,22 @@ class AppConfig(BaseModel):
     # config line fixes.
     dictate_language: str | None = None
 
-    # Right Option alone. Nothing on macOS is bound to it, it is comfortable to
-    # hold for the length of a sentence, and it needs no second finger. Measured
-    # 2026-08-10: it does not fire on left Option — backend/hotkey.py explains
-    # why that took work.
-    hotkey: str = "<alt_r>"
-    hotkey_mode: Literal["push", "toggle"] = "push"
+    # Two keys, not one key with a mode switch. Holding to insert a phrase and
+    # toggling on to dictate a paragraph are different gestures used at
+    # different moments, and binding them separately means each can dodge
+    # whatever else on this machine already claims a key.
+    #
+    # No default is safe on every machine — the author found right Option taken
+    # by WeChat and a left-Option double tap taken by Claude, and macOS exposes
+    # no way to enumerate what other apps have grabbed (see `utter keys`).
+    # Either may be set to None to disable that gesture entirely.
+    hotkey_push: str | None = "<alt_r>"
+    hotkey_toggle: str | None = None
+
+    # Double tap rather than single. A single press on a bare modifier is a trap:
+    # brushing the key silently starts recording everything said next. macOS uses
+    # a double tap for its own dictation shortcut for the same reason.
+    hotkey_toggle_double_tap: bool = True
     dictate_target: Literal["cursor", "scratchpad"] = "cursor"
 
     # --- dictation post-processing (design §4.1g, §4.1h) ---

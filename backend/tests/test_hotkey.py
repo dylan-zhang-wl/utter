@@ -405,3 +405,66 @@ def test_modifiers_skip_canonicalisation(monkeypatch, fake_pynput):
 
     assert listener._canonical(kb.Key.alt_r) is kb.Key.alt_r
     listener.close()
+
+
+# --- double tap --------------------------------------------------------------
+
+
+def tap(m, keys=(CMD, ALT)):
+    for k in keys:
+        m.press(k)
+    for k in keys:
+        m.release(k)
+
+
+def test_a_single_tap_does_nothing():
+    """Single-press toggle on a bare modifier is a trap: right Option is a key
+    people brush against, and an accidental toggle silently records whatever is
+    said next."""
+    m, events = matcher("double_toggle")
+    tap(m)
+    assert events == []
+
+
+def test_two_quick_taps_start():
+    m, events = matcher("double_toggle")
+    tap(m)
+    tap(m)
+    assert kinds(events) == ["start"]
+
+
+def test_two_more_taps_stop():
+    m, events = matcher("double_toggle")
+    for _ in range(4):
+        tap(m)
+    assert kinds(events) == ["start", "stop"]
+
+
+def test_slow_taps_do_not_count(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(hotkey.time, "perf_counter", lambda: clock[0])
+
+    m, events = matcher("double_toggle")
+    tap(m)
+    clock[0] = hotkey.DOUBLE_TAP_SECONDS + 0.1
+    tap(m)
+
+    assert events == [], "two presses a second apart are two separate touches"
+
+
+def test_a_third_tap_does_not_immediately_retrigger():
+    """After a double tap fires, the counter resets — otherwise tap-tap-tap
+    would start and immediately stop."""
+    m, events = matcher("double_toggle")
+    tap(m)
+    tap(m)
+    tap(m)
+    assert kinds(events) == ["start"]
+
+
+def test_double_tap_survives_holding():
+    m, events = matcher("double_toggle")
+    tap(m)
+    m.press(CMD)
+    m.press(ALT)
+    assert kinds(events) == ["start"]

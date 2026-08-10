@@ -47,6 +47,25 @@ TARGET_MS_WITHOUT_POLISH = 1500
 TARGET_MS_WITH_POLISH = 3000
 
 
+class _HotkeyGroup:
+    """Several listeners behind one start/close pair."""
+
+    def __init__(self, listeners):
+        self.listeners = listeners
+
+    def is_available(self):
+        return self.listeners[0].is_available()
+
+    def start(self):
+        for listener in self.listeners:
+            listener.start()
+        return self
+
+    def close(self):
+        for listener in self.listeners:
+            listener.close()
+
+
 @dataclass
 class _Job:
     index: int
@@ -87,11 +106,34 @@ class DictationDaemon:
         if self.make_mic is None:
             self.make_mic = lambda: MicSource(device_index=self.config.input_device)
         if self.hotkey_factory is None:
-            self.hotkey_factory = lambda on_event: HotkeyListener(
-                on_event=on_event,
-                combination=self.config.hotkey,
-                mode=self.config.hotkey_mode,
+            self.hotkey_factory = self._default_hotkeys
+
+    def _default_hotkeys(self, on_event):
+        """Both gestures at once, each on its own key.
+
+        Returns something with start/close, so the daemon does not care whether
+        one listener is running or two.
+        """
+        listeners = []
+        if self.config.hotkey_push:
+            listeners.append(
+                HotkeyListener(on_event=on_event, combination=self.config.hotkey_push,
+                               mode="push")
             )
+        if self.config.hotkey_toggle:
+            listeners.append(
+                HotkeyListener(
+                    on_event=on_event,
+                    combination=self.config.hotkey_toggle,
+                    mode="double_toggle" if self.config.hotkey_toggle_double_tap else "toggle",
+                )
+            )
+        if not listeners:
+            raise HotkeyError(
+                "没有配置任何热键。请在 ~/Utter/config.json 里设 hotkey_push 或 "
+                "hotkey_toggle；用 `utter keys` 找一个没被别的 app 占用的键。"
+            )
+        return _HotkeyGroup(listeners)
 
     # -- lifecycle --
 

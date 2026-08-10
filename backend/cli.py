@@ -290,9 +290,16 @@ def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
     daemon = DictationDaemon(config=config, stt=stt, polish=polish, on_text=show)
 
     where = "光标处" if config.dictate_target == "cursor" else "暂存区（不注入）"
+    toggle_label = (
+        f"{config.hotkey_toggle}  "
+        f"({'双击开、再双击停' if config.hotkey_toggle_double_tap else '按一次开、再按一次停'})"
+        if config.hotkey_toggle
+        else "未设置（`utter keys` 可找一个空闲键）"
+    )
     print(
         f"Utter 听写已就绪\n"
-        f"  热键   {config.hotkey}  ({'按住说' if config.hotkey_mode == 'push' else '按一次开、再按一次停'})\n"
+        f"  按住说 {config.hotkey_push or '未设置'}\n"
+        f"  长口述 {toggle_label}\n"
         f"  输出   {where}\n"
         f"  模型   {getattr(stt, 'display_name', stt)}\n"
         f"  润色   {'开（' + config.polish_level + '）' if config.polish_enabled else '关'}\n"
@@ -336,6 +343,9 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--language", default=None)
     transcribe.add_argument("--timing", action="store_true", help="report per-utterance latency")
 
+    keys = sub.add_parser("keys", help="find a hotkey nothing else has claimed")
+    keys.add_argument("--seconds", type=float, default=60.0)
+
     dictate = sub.add_parser("dictate", help="run the resident dictation daemon")
     dictate.add_argument("--target", choices=["cursor", "scratchpad"], default=None)
     dictate.add_argument("--mode", choices=["push", "toggle"], default=None)
@@ -358,6 +368,10 @@ def main(argv=None, stdout=None, **overrides) -> int:
         return cmd_models(args, out)
     if args.command == "transcribe":
         return cmd_transcribe(args, out, **overrides)
+    if args.command == "keys":
+        from backend import keyprobe
+
+        return keyprobe.run(out, seconds=args.seconds)
     if args.command == "dictate":
         return cmd_dictate(args, out, **overrides)
 
