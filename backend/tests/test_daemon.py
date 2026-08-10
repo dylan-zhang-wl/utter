@@ -48,17 +48,29 @@ class FakeStt:
 
 
 class FakeInjector:
+    """Mirrors the real Injector's attribute names.
+
+    It did not, until now: the fake exposed `locked` while the real one exposes
+    `target`, and daemon code reading `.target` therefore saw None in tests and
+    a real value in production. Fakes that drift from the thing they stand in
+    for hide exactly the bug they were written to catch.
+    """
+
     def __init__(self):
         self.injected = []
-        self.locked = None
+        self.target = None
         self.pending = 0
 
+    @property
+    def locked(self):
+        return self.target
+
     def lock_target(self, target=None):
-        self.locked = target or Target(pid=1, name="TestApp")
-        return self.locked
+        self.target = target or Target(pid=1, name="TestApp")
+        return self.target
 
     def release(self):
-        self.locked = None
+        self.target = None
 
     def inject(self, index, text):
         self.injected.append((index, text))
