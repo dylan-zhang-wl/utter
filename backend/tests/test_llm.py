@@ -128,8 +128,12 @@ def test_safe_polish_returns_the_raw_text_on_failure():
 
 
 def test_safe_polish_reports_success():
-    text, polished = llm.safe_polish(FakeLlm(reply="the tidy words"), "the raw words")
-    assert text == "the tidy words"
+    """The reply has to be a *legal* polish now. This test used to hand back
+    "the tidy words" for "the raw words" and expect success — which the content
+    guard correctly refuses, because swapping a word is exactly what 铁律 10
+    forbids. Punctuation only."""
+    text, polished = llm.safe_polish(FakeLlm(reply="The raw words."), "the raw words")
+    assert text == "The raw words."
     assert polished is True
 
 

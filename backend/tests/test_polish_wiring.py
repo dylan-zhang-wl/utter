@@ -34,7 +34,9 @@ class FakeLlm:
 @pytest.fixture
 def wired(monkeypatch):
     def install(llm):
-        monkeypatch.setattr("backend.cli._llm_providers", lambda: [llm])
+        # Signature matters: _llm_providers takes a config now, because Vertex
+        # needs a project id to be constructed at all.
+        monkeypatch.setattr("backend.cli._llm_providers", lambda config=None: [llm])
         return llm
     return install
 

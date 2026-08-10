@@ -22,6 +22,7 @@ are ever on the table.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Protocol, runtime_checkable
 
 import httpx  # re-exported so tests can patch one place
@@ -44,6 +45,66 @@ __all__ = [
 # instead of editing ("OK", "Sure, here you go") or silently dropped half the
 # text. Either way the original is the safer thing to keep.
 _MIN_LENGTH_RATIO = 0.5
+
+# Only these may disappear. Everything else in the author's speech is content.
+#
+# Measured 2026-08-10 against gemini-2.5-flash-lite, with a prompt that says in
+# bold that rewording and deleting are forbidden:
+#
+#   light   deleted nothing                                      ✓
+#   medium  deleted 呃 AND 因为   ← a causal connective
+#   heavy   turned 这个我觉得 into 我觉得这个  ← reordered
+#
+# Both of those are precisely what 铁律 10 exists to stop, and both read
+# perfectly well, which is why re-reading would not catch them. A prompt is a
+# request; this is the enforcement.
+_FILLERS = (
+    "就是说", "然后就是", "那个那个", "这个这个",
+    "嗯", "呃", "啊", "哦", "唉", "呐", "額", "额",
+    "um", "uh", "erm", "you know", "i mean",
+)
+
+# Punctuation and whitespace are the one thing polish IS allowed to change, so
+# they are removed before comparing. Covers both widths, plus the paragraph
+# breaks the heavy level adds.
+_IGNORABLE = re.compile(r"[\s，。？！、；：「」『』（）《》,.?!;:'\"()\[\]—…·-]+")
+
+
+def content_signature(text: str) -> str:
+    """What the sentence says, with everything polish may legally touch removed.
+
+    Two texts with the same signature differ only in punctuation, spacing and
+    filler words. Two texts with different signatures differ in *content* —
+    a word was added, dropped, swapped or moved — and 铁律 10 forbids all four.
+    """
+    stripped = _IGNORABLE.sub("", text)
+    lowered = stripped.lower()
+    for filler in _FILLERS:
+        lowered = lowered.replace(filler.lower(), "")
+    return lowered
+
+
+def content_changed(before: str, after: str) -> str | None:
+    """None if only punctuation and filler moved; else a short description.
+
+    The description goes into a log line and a warning, because 铁律 10's other
+    half is that the author must be able to tell it happened.
+    """
+    a, b = content_signature(before), content_signature(after)
+    if a == b:
+        return None
+
+    import difflib
+
+    ops = difflib.SequenceMatcher(None, a, b).get_opcodes()
+    dropped = "".join(a[i:j] for tag, i, j, _, _ in ops if tag in ("delete", "replace"))
+    added = "".join(b[i:j] for tag, _, _, i, j in ops if tag in ("insert", "replace"))
+    parts = []
+    if dropped:
+        parts.append(f"删掉了「{dropped[:30]}」")
+    if added:
+        parts.append(f"加上了「{added[:30]}」")
+    return "，".join(parts) or "内容变了"
 
 
 class LlmError(RuntimeError):
@@ -169,6 +230,14 @@ def safe_polish(
             len(result),
             len(text),
         )
+        return text, False
+
+    # 铁律 10, enforced rather than requested. Measured on a real model with a
+    # prompt that forbids this in bold: medium dropped 「因为」 from a sentence
+    # and heavy reordered a clause. Both read beautifully. That is the danger.
+    changed = content_changed(text, result)
+    if changed is not None:
+        log.warning("polish changed the content (%s), keeping the raw transcript", changed)
         return text, False
 
     return result, True

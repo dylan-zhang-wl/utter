@@ -48,6 +48,12 @@ huggingface-hub>=0.23       # tier downloader; reuses ~/.cache/huggingface
 # AXIsProcessTrusted explicitly rather than appearing to work.
 pynput>=1.7 ; sys_platform == "darwin"
 
+# --- Google Cloud credentials (Vertex AI, no API key) ------------------------
+# Pure Python, ~1MB, no torch. Vertex takes an OAuth bearer token rather than a
+# key, which is the only way to reach it when the user has Cloud credit but no
+# Gemini API key. Optional: everything still works with an API key instead.
+google-auth>=2.29
+
 # --- secrets -----------------------------------------------------------------
 keyring>=25.0               # macOS Keychain. 铁律 4: keys never touch disk in plain text
 

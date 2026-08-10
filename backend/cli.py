@@ -161,7 +161,7 @@ def build_polish(config):
     if not config.polish_enabled:
         return None
 
-    provider = _llm_provider_named(config.llm_provider)
+    provider = _llm_provider_named(config.llm_provider, config)
     if provider is None:
         log.warning("polish is on but %r is unknown", config.llm_provider)
         return None
@@ -190,18 +190,35 @@ def build_polish(config):
     return polish
 
 
-def _llm_provider_named(name: str):
-    for provider in _llm_providers():
+def _llm_provider_named(name: str, config=None):
+    """Look one up by id, configured from `config` where it needs to be.
+
+    Vertex is the reason this takes a config at all: it needs a project id,
+    and a provider list built for `doctor` cannot know one.
+    """
+    for provider in _llm_providers(config):
         if provider.id == name:
             return provider
     return None
 
 
-def _llm_providers():
+def _llm_providers(config=None):
     """Instantiated defensively — a broken optional dependency should degrade
     one line of `doctor`, not the whole command."""
+    if config is None:
+        config = load_config()
+
+    kwargs = {
+        "VertexProvider": {
+            "project": config.vertex_project,
+            "location": config.vertex_location,
+            "model": config.vertex_model,
+        },
+    }
+
     found = []
     for module_name, class_name in (
+        ("backend.providers.vertex", "VertexProvider"),
         ("backend.providers.gemini", "GeminiProvider"),
         ("backend.providers.ollama", "OllamaProvider"),
         ("backend.providers.openai_compat", "OpenAICompatProvider"),
@@ -209,7 +226,7 @@ def _llm_providers():
     ):
         try:
             module = __import__(module_name, fromlist=[class_name])
-            found.append(getattr(module, class_name)())
+            found.append(getattr(module, class_name)(**kwargs.get(class_name, {})))
         except Exception:  # pragma: no cover - defensive
             pass
     return found
@@ -422,7 +439,7 @@ def cmd_polish(args, out) -> int:
 
     config = load_config()
     name = args.provider or config.llm_provider
-    provider = _llm_provider_named(name)
+    provider = _llm_provider_named(name, config)
     if provider is None:
         print(f"没有叫 {name!r} 的 LLM provider。`utter doctor` 列了有哪些。", file=out)
         return 1

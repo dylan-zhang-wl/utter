@@ -1095,3 +1095,31 @@ def test_changing_the_level_rebuilds_too():
 
     assert d.config.polish_level == "heavy"
     assert seen == ["heavy"]
+
+
+def test_saving_from_the_menu_does_not_clobber_hand_edits(tmp_path, monkeypatch):
+    """Found live: the daemon wrote its whole in-memory config back, so a field
+    edited in config.json while it ran was silently reverted the next time
+    anyone touched the menu. Our own error messages tell the author to edit
+    that file."""
+    from backend import config as cfg
+
+    # Real load and save, pointed at a temp directory — the bug lives in how
+    # those two interact, so faking either would test nothing.
+    monkeypatch.setattr("backend.config.DEFAULT_DIR", tmp_path)
+    cfg.save(AppConfig())
+
+    d = build()
+    d.config.polish_level = "heavy"          # the menu changed this
+
+    # Meanwhile, the author edits the file by hand.
+    on_disk = cfg.load()
+    on_disk.vertex_project = "手工填的项目"
+    cfg.save(on_disk)
+
+    d._save_config()
+
+    after = cfg.load()
+    assert after.polish_level == "heavy", "the menu's change was saved"
+    assert after.vertex_project == "手工填的项目", "the hand edit survived"
+    assert d.config.vertex_project == "手工填的项目", "and memory picked it up"

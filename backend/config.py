@@ -43,6 +43,13 @@ class AppConfig(BaseModel):
     # request per utterance, which the free quota covers.
     llm_provider: str = "gemini"
 
+    # Vertex AI, for when there is Google Cloud credit but no API key. Not a
+    # secret: a project id is an identifier, and the credential it is used with
+    # lives in gcloud's own store, never here (铁律 4).
+    vertex_project: str | None = None
+    vertex_location: str = "global"
+    vertex_model: str = "google/gemini-2.5-flash-lite"
+
     # --- audio input ---
     # None means "whatever macOS calls the default". Not a safe assumption on
     # this machine: the default has been seen as a Bluetooth speaker and as

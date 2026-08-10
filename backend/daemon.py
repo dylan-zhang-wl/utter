@@ -318,17 +318,43 @@ class DictationDaemon:
             return False, "没有可用的 LLM —— 先存 API key（utter doctor 里有说明）"
         return bool(self.polish), ""
 
-    def _save_config(self) -> None:
-        """Persist whatever the menu just changed.
+    #: The only settings the menu can change, and therefore the only ones the
+    #: daemon may write back. Everything else in config.json belongs to whoever
+    #: edited it last.
+    MENU_OWNED = (
+        "stt_provider",
+        "dictate_language",
+        "dictate_target",
+        "polish_enabled",
+        "polish_level",
+    )
 
-        The first version of the menu mutated the in-memory config and nothing
-        else, so every setting silently reverted on restart — the same illusion
-        v1's Settings page created, rebuilt by hand.
+    def _save_config(self) -> None:
+        """Persist what the menu changed, without clobbering the rest.
+
+        Two bugs, one line. The first: the menu mutated the in-memory config
+        and nothing else, so every setting reverted on restart — v1's Settings
+        page rebuilt by hand.
+
+        The second, found 2026-08-10 while the daemon was running: saving wrote
+        the *whole* in-memory config back, so an edit made to config.json in an
+        editor was silently reverted the next time anyone touched the menu. Our
+        own error messages tell the author to edit that file ("在
+        ~/Utter/config.json 里填上项目 ID"), and then a background process undid
+        it. Reload, apply only what the menu owns, write.
         """
         try:
-            from backend.config import save
+            from backend.config import load, save
 
-            save(self.config)
+            on_disk = load()
+            for field in self.MENU_OWNED:
+                setattr(on_disk, field, getattr(self.config, field))
+            # Keep memory and disk in step, so anything edited externally while
+            # we ran is picked up rather than sitting there waiting to be lost.
+            for field, value in on_disk.model_dump().items():
+                if field not in self.MENU_OWNED:
+                    setattr(self.config, field, value)
+            save(on_disk)
         except Exception:
             log.warning("could not save the config", exc_info=True)
 
