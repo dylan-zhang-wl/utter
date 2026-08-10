@@ -83,6 +83,7 @@ class DictationDaemon:
     _stop_flag: threading.Event = field(init=False, default_factory=threading.Event)
     _idle: threading.Event = field(init=False, default_factory=threading.Event)
     _vad: object | None = field(init=False, default=None)
+    _locked_at_press: str | None = field(init=False, default=None)
 
     def __post_init__(self):
         self.scratchpad = Scratchpad(archive=SessionArchive())
@@ -246,7 +247,9 @@ class DictationDaemon:
 
         # Lock the target now rather than at the end: by then the user may have
         # switched windows, and the text belongs where they started talking.
-        self.injector.lock_target()
+        locked = self.injector.lock_target()
+        self._locked_at_press = getattr(locked, "name", None)
+        log.info("press: locked target = %s", self._locked_at_press)
 
         try:
             self._mic = self.make_mic().start()
@@ -403,17 +406,27 @@ class DictationDaemon:
         self.scratchpad.add(utterance)
 
         if self.config.dictate_target == "cursor":
+            from backend.injection import _frontmost
+
+            before = _frontmost()
             with watch.span("注入（写剪贴板→⌘V→还原）"):
                 result = self.injector.inject(job.index, text)
+            after = _frontmost()
+            # Everything needed to tell where this went and why, in one line.
+            # Reasoning about it from the outside has cost several rounds; the
+            # daemon knows all four facts and was reporting none of them.
+            watch.note_route(
+                pressed=self._locked_at_press,
+                target=getattr(getattr(self.injector, "target", None), "name", None),
+                before=getattr(before, "name", None),
+                after=getattr(after, "name", None),
+                result=result,
+            )
             # Whether the text landed, and where, was invisible until now — the
             # report showed a duration for an injection that may never have
             # happened. 铁律 8 is about not losing text silently; not saying
             # where it went is the same failure one step later.
-            target = getattr(self.injector, "target", None)
-            if result.injected:
-                watch.note_target(getattr(target, "name", "?"))
-            else:
-                watch.note_target(getattr(target, "name", "?"), failed=result.reason)
+
 
         if self.on_text is not None:
             try:

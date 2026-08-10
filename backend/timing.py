@@ -59,6 +59,23 @@ class Stopwatch:
         """Record where the text was sent, and whether it arrived."""
         self.target_note = f"注入 → {name}" if not failed else f"⚠ 未注入 → {name}：{failed}"
 
+    def note_route(self, *, pressed, target, before, after, result) -> None:
+        """The whole journey on one line.
+
+        Four facts decide where dictated text lands — which app was frontmost
+        when the key went down, which one the injector was aiming at, which was
+        frontmost when it fired, and which ended up frontmost after. The daemon
+        knew all four and printed none, so several rounds went into inferring
+        them from the outside.
+        """
+        verdict = "✅ 已注入" if result.injected else (
+            "⏸ 已缓冲" if result.buffered else "⚠ 未注入")
+        self.target_note = (
+            f"按下时 {pressed or '?'} → 目标 {target or '?'} → "
+            f"注入前前台 {before or '?'} → 注入后前台 {after or '?'}\n"
+            f"  {verdict}" + (f"：{result.reason}" if result.reason else "")
+        )
+
     def note_repetition(self, removed: int) -> None:
         self.repetition_note = (
             f"⚠ 模型复读了，已折叠 {removed} 处重复。"
