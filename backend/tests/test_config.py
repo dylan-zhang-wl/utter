@@ -26,6 +26,15 @@ def test_defaults_match_the_design():
     assert c.max_utterance_sec == 30
 
 
+def test_input_device_defaults_to_the_system_default():
+    assert cfg.AppConfig().input_device is None
+
+
+def test_input_device_round_trips(tmp_path):
+    cfg.save(cfg.AppConfig(input_device=3), base_dir=tmp_path)
+    assert cfg.load(base_dir=tmp_path).input_device == 3
+
+
 def test_polish_defaults_encode_the_rules():
     """铁律 10 and the P2a decision, locked in as defaults rather than prose."""
     c = cfg.AppConfig()

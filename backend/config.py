@@ -39,6 +39,14 @@ class AppConfig(BaseModel):
     model_tier: ModelTier = "balanced"
     llm_provider: str = "ollama"
 
+    # --- audio input ---
+    # None means "whatever macOS calls the default". Not a safe assumption on
+    # this machine: the default has been seen as a Bluetooth speaker and as
+    # AirPods, and no built-in microphone appears in the list at all. Bluetooth
+    # inputs often negotiate a call-quality profile, which degrades
+    # transcription in a way that reads as a bad model rather than a bad mic.
+    input_device: int | None = None
+
     # --- segmentation (design §5.4) ---
     vad_silence_ms: int = 600
     vad_sensitivity: float = 0.5
