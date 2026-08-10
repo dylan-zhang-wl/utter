@@ -250,8 +250,15 @@ class DictationDaemon:
 
         try:
             self._mic = self.make_mic().start()
-        except Exception:
-            log.warning("could not open the microphone", exc_info=True)
+        except Exception as exc:
+            # PortAudio prints its own wall of text to stderr before we ever see
+            # this. Say the one thing the author can act on.
+            log.warning("could not open the microphone: %s", exc)
+            print(
+                f"\n⚠ 打不开麦克风：{exc}\n"
+                "  跑 `utter mics` 看哪个设备真的能录到声音。\n",
+                flush=True,
+            )
             self._mic = None
 
     def end_utterance(self, at: float | None = None) -> None:

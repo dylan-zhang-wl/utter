@@ -370,6 +370,60 @@ def cmd_sessions(args, out) -> int:
     return 0
 
 
+def cmd_mics(args, out) -> int:
+    """Open every input device and see whether sound actually arrives.
+
+    `list_devices()` only asks CoreAudio what exists, and on this machine that
+    answer is misleading: a speaker, two virtual recorders and a meeting app all
+    advertise input channels, all open without error, and all deliver pure
+    silence. Recommending one of them from the listing alone — which is exactly
+    what happened on 2026-08-10 — left the author with a dictation tool that
+    heard nothing.
+    """
+    import time
+
+    import numpy as np
+
+    from backend import audio_source
+
+    devices = audio_source.list_devices()
+    if not devices:
+        print("找不到任何输入设备。", file=out)
+        return 1
+
+    print(f"逐个真开 {args.seconds:.1f} 秒，说点话再看结果：\n", file=out)
+    working = []
+    for device in devices:
+        try:
+            source = audio_source.MicSource(device_index=device.index).start()
+            time.sleep(args.seconds)
+            chunks = list(source.chunks())
+            source.stop()
+        except Exception as exc:
+            print(f"  [{device.index}] {device.name:<34} ❌ 打不开：{str(exc)[:50]}", file=out)
+            continue
+
+        if not chunks:
+            print(f"  [{device.index}] {device.name:<34} ❌ 开了但没有数据", file=out)
+            continue
+
+        peak = float(np.abs(np.concatenate(chunks)).max())
+        if peak < 1e-4:
+            print(f"  [{device.index}] {device.name:<34} ⚠ 全静音（不是真麦克风，或没收到声音）", file=out)
+        else:
+            mark = "  ←系统默认" if device.is_default else ""
+            print(f"  [{device.index}] {device.name:<34} ✅ 峰值 {peak:.3f}{mark}", file=out)
+            working.append(device)
+
+    if working:
+        print(f"\n可用。在 ~/Utter/config.json 里设 \"input_device\": {working[0].index}，"
+              f"或留 null 跟随系统默认。", file=out)
+    else:
+        print("\n⚠ 没有一个设备录到声音。Mac mini 没有内置麦克风——"
+              "确认蓝牙耳机已连接，或插一个 USB 麦克风。", file=out)
+    return 0 if working else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="utter", description="Utter — local-first speech")
     sub = parser.add_subparsers(dest="command")
@@ -384,6 +438,9 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--mode", choices=["listen", "dictate"], default="listen")
     transcribe.add_argument("--language", default=None)
     transcribe.add_argument("--timing", action="store_true", help="report per-utterance latency")
+
+    mics = sub.add_parser("mics", help="open every input device and see which actually hears")
+    mics.add_argument("--seconds", type=float, default=1.5)
 
     sessions = sub.add_parser("sessions", help="read back what was dictated")
     sessions.add_argument("--list", action="store_true", help="list sessions instead of printing the latest")
@@ -414,6 +471,8 @@ def main(argv=None, stdout=None, **overrides) -> int:
         return cmd_models(args, out)
     if args.command == "transcribe":
         return cmd_transcribe(args, out, **overrides)
+    if args.command == "mics":
+        return cmd_mics(args, out)
     if args.command == "sessions":
         return cmd_sessions(args, out)
     if args.command == "keys":
