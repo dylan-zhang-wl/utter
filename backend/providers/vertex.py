@@ -53,6 +53,11 @@ DEFAULT_MODEL = "google/gemini-2.5-flash-lite"
 #: with a credential that expires in flight.
 EXPIRY_MARGIN_SECONDS = 60
 
+#: Same ceiling as the OpenAI provider, and for the same reason: polish runs on
+#: the one worker that delivers text in order, so a hung request stops every
+#: later utterance rather than just this one.
+REQUEST_TIMEOUT = 12.0
+
 
 def _base_url(project: str, location: str) -> str:
     host = (
@@ -177,7 +182,10 @@ class VertexProvider:
 
             try:
                 client = OpenAI(
-                    api_key=token, base_url=_base_url(self.project, self.location)
+                    api_key=token,
+                    base_url=_base_url(self.project, self.location),
+                    timeout=REQUEST_TIMEOUT,
+                    max_retries=1,
                 )
                 response = client.chat.completions.create(
                     model=self.model,

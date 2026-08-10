@@ -118,10 +118,12 @@ def test_the_model_is_resolved_against_the_key_not_hardcoded(monkeypatch):
     from backend.providers import openai_compat as oc
 
     p = oc.OpenAICompatProvider()
-    monkeypatch.setattr(p, "_client", lambda: _Client(["gpt-5-nano", "gpt-4o-mini"]))
+    monkeypatch.setattr(p, "_client", lambda: _Client(["gpt-5.4-mini", "gpt-4o-mini"]))
     monkeypatch.setattr(p, "_key", lambda: "sk-test")
 
-    assert p.resolve_model() == "gpt-5-nano"
+    # Preference order comes from measurement, not from tier names — see the
+    # comment on PREFERRED_MODELS.
+    assert p.resolve_model() == "gpt-5.4-mini"
 
 
 def test_an_explicit_model_is_honoured_as_given(monkeypatch):
@@ -158,3 +160,82 @@ def test_non_chat_models_are_never_offered(monkeypatch):
     monkeypatch.setattr(p, "_key", lambda: "sk-test")
 
     assert p.chat_models() == ["gpt-5-mini", "gpt-5-nano"]
+
+
+def test_a_model_that_rejects_temperature_zero_is_retried_without_it(monkeypatch):
+    """The whole GPT-5 line answers `temperature: 0` with a 400 — "Only the
+    default (1) value is supported" — so a hardcoded 0.0 locked this provider
+    out of every model newer than 4.1, and the error was being swallowed into a
+    bare class name."""
+    from backend.providers import openai_compat as oc
+
+    seen = []
+
+    class _Completions:
+        def create(self, **kwargs):
+            seen.append("temperature" in kwargs)
+            if "temperature" in kwargs:
+                raise RuntimeError(
+                    "Error code: 400 - Unsupported value: 'temperature' does not "
+                    "support 0.0 with this model."
+                )
+            return type("R", (), {"choices": [type("C", (), {
+                "message": type("M", (), {"content": "补好标点。"})()
+            })()]})()
+
+    class _Client:
+        chat = type("Chat", (), {"completions": _Completions()})()
+
+    p = oc.OpenAICompatProvider(model="gpt-5.4-mini")
+    monkeypatch.setattr(p, "_client", lambda **k: _Client())
+    monkeypatch.setattr(p, "_key", lambda: "sk-test")
+
+    assert p.complete("sys", "user") == "补好标点。"
+    assert seen == [True, False], "tried with, then without"
+
+    seen.clear()
+    p.complete("sys", "user")
+    assert seen == [False], "and remembered, so it does not pay the 400 twice"
+
+
+def test_the_servers_error_message_survives(monkeypatch):
+    """A 400 explaining exactly what is wrong was arriving as `LlmError` and
+    cost a separate investigation to read."""
+    from backend.providers import openai_compat as oc
+
+    class _Completions:
+        def create(self, **kwargs):
+            exc = RuntimeError("boom")
+            exc.body = {"error": {"message": "model `gpt-9` does not exist"}}
+            raise exc
+
+    class _Client:
+        chat = type("Chat", (), {"completions": _Completions()})()
+
+    p = oc.OpenAICompatProvider(model="gpt-9")
+    monkeypatch.setattr(p, "_client", lambda **k: _Client())
+    monkeypatch.setattr(p, "_key", lambda: "sk-test")
+
+    with pytest.raises(oc.LlmError, match="does not exist"):
+        p.complete("sys", "user")
+
+
+def test_the_client_has_a_timeout(monkeypatch):
+    """The SDK default is ten minutes. Polish runs on the single worker that
+    delivers text in order (铁律 11), so one hung request stops every later
+    utterance — worse than an error, and 铁律 8 cannot catch it."""
+    from backend.providers import openai_compat as oc
+
+    captured = {}
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
+    p = oc.OpenAICompatProvider()
+    monkeypatch.setattr(p, "_key", lambda: "sk-test")
+    p._client()
+
+    assert captured["timeout"] == oc.REQUEST_TIMEOUT
+    assert captured["max_retries"] == 1, "2 retries turns a 12s ceiling into 36"

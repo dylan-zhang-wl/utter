@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -373,6 +374,17 @@ def _build_stamp() -> str:
         return ""
 
 
+#: The tiers worth timing for a punctuation task: the small/fast families and
+#: anything explicitly named nano, mini or lite. Everything else on this key —
+#: -pro, o1, o3, the 2023 gpt-3.5 line — is either far slower, far dearer, or
+#: both, for a job that inserts commas.
+_WORTH_BENCHMARKING = re.compile(r"(nano|mini|lite|luna|flash)")
+
+#: Reasoning families. They match "mini" (o3-mini, o4-mini) but think before
+#: answering, which is the opposite of what a punctuation pass wants, and they
+#: are what hung the first benchmark run for twenty minutes.
+_REASONING = re.compile(r"^(o[0-9]+|.*-pro)(-|$)")
+
 #: A sentence with the shape that matters: Chinese argument, embedded English
 #: terminology, filler, no punctuation at all. Benchmarking on "hello world"
 #: would rank models on a task we never ask them to do.
@@ -383,7 +395,7 @@ _BENCHMARK_TEXT = (
 )
 
 
-def _benchmark_models(provider, text: str, config, out) -> int:
+def _benchmark_models(provider, text: str, config, out, args_all=None) -> int:
     """Time every reachable chat model on the real prompt, and rank them.
 
     Written because guessing was wrong twice. Third-party lists of "the fastest
@@ -413,6 +425,26 @@ def _benchmark_models(provider, text: str, config, out) -> int:
     if not candidates:
         print("这个 key 一个可用的对话模型都看不到。", file=out)
         return 1
+
+    everything = list(candidates)
+    if not getattr(args_all, "benchmark_all", False):
+        # Do not spend the author's money on the reasoning tiers to learn what
+        # is obvious: they are slower and cost up to 600x more per token, and
+        # polish is punctuation. Their key sees 68 models, several of them
+        # -pro at $30/$180 per million. Opt in with --benchmark-all.
+        candidates = [
+            m for m in candidates
+            if _WORTH_BENCHMARKING.search(m) and not _REASONING.match(m)
+        ]
+        skipped = len(everything) - len(candidates)
+        if skipped:
+            print(
+                f"（跳过 {skipped} 个推理档与旧款；润色只是补标点，"
+                f"用不上，而且 -pro 那几个一次调用就不便宜。要全测加 --benchmark-all）\n",
+                file=out,
+            )
+    if not candidates:
+        candidates = everything[:8]
 
     print(f"{len(candidates)} 个可用对话模型，逐个跑同一句真实口述\n", file=out)
     print(f"原文  {text}\n", file=out)
@@ -544,7 +576,7 @@ def cmd_polish(args, out) -> int:
         return 1
 
     if args.benchmark:
-        return _benchmark_models(provider, text.strip(), config, out)
+        return _benchmark_models(provider, text.strip(), config, out, args)
 
     levels = [args.level] if args.level else ["light", "medium", "heavy"]
     print(f"模型  {getattr(provider, 'model', provider.display_name)}\n", file=out)
@@ -875,7 +907,12 @@ def build_parser() -> argparse.ArgumentParser:
     polish_cmd.add_argument(
         "--benchmark",
         action="store_true",
-        help="time every model this key can reach, on a realistic sentence",
+        help="time the fast models this key can reach, on a realistic sentence",
+    )
+    polish_cmd.add_argument(
+        "--benchmark-all",
+        action="store_true",
+        help="include the reasoning and -pro tiers too (costs real money)",
     )
 
     keys = sub.add_parser("keys", help="find a hotkey nothing else has claimed")
