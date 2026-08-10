@@ -97,6 +97,20 @@ class AppConfig(BaseModel):
     # end punctuation at all. Off if you dictate one sentence across several
     # presses — a full stop mid-thought is worse than none.
     close_sentences: bool = True
+
+    # ⌘V only posts a keystroke; the application reads the pasteboard on its own
+    # event loop some milliseconds later, and restoring before it does means it
+    # pastes the *old* clipboard. VoiceInk exposes this as a setting rather than
+    # a constant, which is the right call — how long an application takes varies,
+    # and 250ms is a guess that happened to work here.
+    paste_settle_ms: int = 250
+
+    # Last resort when clipboard paste is silently refused. Off by default:
+    # measured on this machine, typing 125 characters delivered only 113 of
+    # them. Losing a dozen characters without knowing which is worse than a
+    # visible failure — but it beats nothing at all in an app that will not
+    # accept a paste (铁律 12 forbids this as the *default*, not as a fallback).
+    type_out_fallback: bool = False
     dictate_target: Literal["cursor", "scratchpad"] = "cursor"
 
     # --- dictation post-processing (design §4.1g, §4.1h) ---

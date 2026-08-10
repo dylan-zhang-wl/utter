@@ -462,3 +462,38 @@ def test_reading_a_role_is_not_writing_a_value():
     source = open(injection.__file__).read()
     assert "AXUIElementSetAttributeValue" not in source
     assert "AXUIElementCopyAttributeValue" in source
+
+
+def test_settle_delay_is_configurable():
+    """VoiceInk exposes this rather than hardcoding it, which is the right call:
+    how long an application takes to read the pasteboard varies, and 250ms is a
+    guess that happened to work on one machine."""
+    assert injection.Injector(settle_seconds=0.4).settle_seconds == 0.4
+
+
+def test_type_out_is_off_by_default():
+    """Measured here: typing 125 characters delivered 113. Losing a dozen
+    without knowing which is worse than a visible failure."""
+    assert injection.Injector().type_out_fallback is False
+
+
+def test_type_out_rescues_a_refused_paste(rig, monkeypatch):
+    injector, board, keys, _ = rig
+    injector.type_out_fallback = True
+    keys.type_out = lambda text: keys.typed.append(text)
+    monkeypatch.setattr(keys, "paste", lambda: (_ for _ in ()).throw(RuntimeError("refused")))
+    injector.lock_target()
+
+    result = injector.inject(0, "text")
+    assert result.injected is True
+    assert keys.typed == ["text"]
+    assert "掉字" in result.reason, "the user must know this path is lossy"
+
+
+def test_a_refused_paste_still_fails_when_the_fallback_is_off(rig, monkeypatch):
+    injector, board, keys, _ = rig
+    monkeypatch.setattr(keys, "paste", lambda: (_ for _ in ()).throw(RuntimeError("refused")))
+    injector.lock_target()
+
+    assert injector.inject(0, "text").injected is False
+    assert keys.typed == []

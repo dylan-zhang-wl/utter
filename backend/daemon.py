@@ -74,7 +74,7 @@ class _Job:
 class DictationDaemon:
     config: AppConfig
     stt: object
-    injector: object = field(default_factory=Injector)
+    injector: object | None = None
     make_mic: Callable[[], object] | None = None
     hotkey_factory: Callable[[Callable[[HotkeyEvent], None]], object] | None = None
     polish: Callable[..., str] | None = None
@@ -98,6 +98,11 @@ class DictationDaemon:
     _locked_at_press: str | None = field(init=False, default=None)
 
     def __post_init__(self):
+        if self.injector is None:
+            self.injector = Injector(
+                settle_seconds=self.config.paste_settle_ms / 1000,
+                type_out_fallback=self.config.type_out_fallback,
+            )
         self.scratchpad = Scratchpad(archive=SessionArchive())
         self._idle.set()
         if self.make_mic is None:

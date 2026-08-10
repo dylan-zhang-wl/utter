@@ -262,6 +262,10 @@ class Keyboard:
             controller.press("v")
             controller.release("v")
 
+    def type_out(self, text: str) -> None:
+        """Character by character. Lossy — see config.type_out_fallback."""
+        self._get().type(text)
+
 
 @dataclass
 class Injector:
@@ -270,6 +274,8 @@ class Injector:
     pasteboard: object = field(default_factory=Pasteboard)
     keyboard: object = field(default_factory=Keyboard)
     target: Target | None = None
+    settle_seconds: float = PASTE_SETTLE_SECONDS
+    type_out_fallback: bool = False
 
     _buffer: list[str] = field(default_factory=list)
     _seen: set[int] = field(default_factory=set)
@@ -381,6 +387,13 @@ class Injector:
             return InjectionResult(injected=True)
         except Exception as exc:
             log.warning("paste failed", exc_info=True)
+            if self.type_out_fallback:
+                try:
+                    self.keyboard.type_out(text)
+                    log.warning("pasted by typing instead; some characters may be missing")
+                    return InjectionResult(injected=True, reason="逐字输入（可能掉字）")
+                except Exception:
+                    log.warning("type-out fallback failed too", exc_info=True)
             return InjectionResult(injected=False, reason=f"paste failed: {exc}")
         finally:
             # Restored whatever happened above. A failed dictation must not also
@@ -393,7 +406,7 @@ class Injector:
 
     def settle(self) -> None:
         """Overridable so tests do not spend a quarter second each."""
-        time.sleep(PASTE_SETTLE_SECONDS)
+        time.sleep(self.settle_seconds)
 
     def _fall_back_to_clipboard(self, text: str) -> InjectionResult:
         """Design §4.1c line 3. The target is gone; leave the words somewhere
