@@ -374,8 +374,29 @@ class DictationDaemon:
             log.warning("speech check failed, transcribing anyway", exc_info=True)
             return True
 
+    #: Primes the decoder toward Simplified Chinese with ordinary punctuation.
+    #: Whisper's Chinese output is unstable in two ways the author hit in real
+    #: use — it sometimes emits Traditional characters, and it sometimes drops
+    #: punctuation entirely. Both are decoding habits, and both respond to being
+    #: shown an example. Measured 2026-08-10: adding this line recovered the
+    #: full stop and question mark that were missing without it.
+    ZH_PRIMER = "以下是简体中文的学术口述内容。"
+
     def _vocabulary_prompt(self) -> str | None:
-        return ", ".join(self.config.vocabulary) if self.config.vocabulary else None
+        """The initial_prompt: design §4.1g layer 1, plus script priming.
+
+        This is the cheapest correction there is — it costs no latency and it
+        works with polish switched off. It is also the *right* layer for
+        terminology: the author's "signs" came back as "science", and no
+        downstream model could recover that, because nothing in "science" points
+        back to the word actually spoken.
+        """
+        parts = []
+        if (self.config.dictate_language or "").startswith("zh"):
+            parts.append(self.ZH_PRIMER)
+        if self.config.vocabulary:
+            parts.append(", ".join(self.config.vocabulary))
+        return " ".join(parts) if parts else None
 
     def _safe_polish(self, raw: str) -> tuple[str, bool]:
         try:

@@ -542,3 +542,44 @@ def test_audio_warm_up_failure_does_not_stop_the_daemon():
     )
     d.start()  # must not raise
     d.stop()
+
+
+def test_chinese_gets_a_simplified_primer():
+    """Whisper's Chinese output wanders between Simplified and Traditional and
+    sometimes drops punctuation. Showing it one well-formed Simplified sentence
+    steadies both — measured 2026-08-10."""
+    stt = FakeStt()
+    d = build(config=AppConfig(dictate_language="zh"), stt=stt)
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    assert "简体中文" in stt.calls[-1]["prompt"]
+    d.stop()
+
+
+def test_english_gets_no_chinese_primer():
+    stt = FakeStt()
+    d = build(config=AppConfig(dictate_language="en", vocabulary=["Venuti"]), stt=stt)
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    assert "简体中文" not in stt.calls[-1]["prompt"]
+    assert "Venuti" in stt.calls[-1]["prompt"]
+    d.stop()
+
+
+def test_primer_and_vocabulary_combine():
+    stt = FakeStt()
+    d = build(config=AppConfig(dictate_language="zh", vocabulary=["semiotic", "符号"]), stt=stt)
+    d.start()
+    d.begin_utterance()
+    d.end_utterance()
+    d.wait_idle()
+
+    prompt = stt.calls[-1]["prompt"]
+    assert "简体中文" in prompt and "semiotic" in prompt and "符号" in prompt
+    d.stop()
