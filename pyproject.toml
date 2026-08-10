@@ -1,0 +1,28 @@
+[project]
+name = "utter"
+version = "0.3.0"
+description = "Local-first dual-mode speech: live transcription with translation, and dictation to the cursor"
+requires-python = ">=3.11"
+
+# Dependencies deliberately live in requirements.txt, not here.
+#
+# mlx-whisper falsely declares torch (476M, 铁律 5), which has to be resolved
+# away with `uv pip install --overrides requirements-overrides.txt`. Declaring
+# the same dependencies here would let a plain `pip install .` re-introduce it
+# with no override in sight. Install the environment from requirements-dev.txt,
+# then add this package with `--no-deps`. See CLAUDE.md.
+dependencies = []
+
+[project.scripts]
+# So `utter dictate` works from any directory. Without this, `python -m
+# backend.cli` only resolves when the shell happens to be sitting in the repo,
+# and a dictation tool you must cd to a path with spaces in it to start is a
+# tool that does not get started.
+utter = "backend.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["backend", "backend.providers"]

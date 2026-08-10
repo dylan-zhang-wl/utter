@@ -48,7 +48,12 @@
 uv venv ~/.venvs/utter
 uv pip install --python ~/.venvs/utter/bin/python \
     --overrides requirements-overrides.txt -r requirements-dev.txt
+uv pip install --python ~/.venvs/utter/bin/python --no-deps -e .
 ```
+
+> 最后一行装的是本项目自身（editable），为的是 `utter` 成为一条真命令。
+> **`--no-deps` 不能省**：本项目的 `pyproject.toml` 刻意不声明依赖，依赖只在
+> `requirements.txt` 里，因为 mlx-whisper 谎报的 torch 必须靠 `--overrides` 挡掉。
 
 > `--overrides` **不是可选的**。`mlx-whisper` 谎报依赖 torch，不加这个参数会拖进 476M
 > 并直接违反铁律 5。证据见 `requirements-overrides.txt`。
@@ -59,13 +64,21 @@ uv pip install --python ~/.venvs/utter/bin/python \
 
 ## 运行
 
-```bash
-# P1 的命令行（可用）
-~/.venvs/utter/bin/python -m backend.cli doctor
-~/.venvs/utter/bin/python -m backend.cli models list
-~/.venvs/utter/bin/python -m backend.cli transcribe FILE.wav --mode listen --timing
+装好后 `utter` 在任何目录都能用（**不要再写 `python -m backend.cli`，那个只在仓库目录内有效**）：
 
-# 测试。默认跳过联网与真模型；全跑加 -m ""
+```bash
+~/.venvs/utter/bin/utter doctor
+~/.venvs/utter/bin/utter models list
+~/.venvs/utter/bin/utter transcribe FILE.wav --mode listen --timing
+
+# 听写。加 --target scratchpad 只暂存不注入
+~/.venvs/utter/bin/utter dictate --timing
+```
+
+嫌路径长就 `export PATH="$HOME/.venvs/utter/bin:$PATH"`，之后直接敲 `utter`。
+
+```bash
+# 测试（要在仓库目录内跑）。默认跳过联网与真模型；全跑加 -m ""
 ~/.venvs/utter/bin/python -m pytest -q
 ```
 
