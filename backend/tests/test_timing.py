@@ -141,14 +141,40 @@ def test_report_carries_dropped_chunks():
 
     report = watch.report()
     assert "3" in report
-    assert "drop" in report.lower()
+    assert "丢弃" in report
 
 
 def test_report_omits_drops_when_there_were_none():
     watch = timing.Stopwatch(dropped_chunks=0)
     watch.mark("transcription", 1180.0)
 
-    assert "drop" not in watch.report().lower()
+    assert "丢弃" not in watch.report()
+
+
+def test_dropped_audio_says_it_was_the_beginning():
+    """The user needs to know *which* part went missing. Losing the opening of
+    a sentence looks like the model mishearing, not like lost audio."""
+    watch = timing.Stopwatch(dropped_chunks=30)
+    watch.mark("transcription", 1180.0)
+
+    assert "开头" in watch.report()
+
+
+def test_report_shows_how_much_audio_was_captured():
+    """The only way to tell "the model misheard me" from "the recording was
+    shorter than what I said" — which is exactly the confusion that hid a
+    ten-second buffer cap for a day."""
+    watch = timing.Stopwatch(audio_seconds=8.4)
+    watch.mark("transcription", 1180.0)
+
+    assert "8.4" in watch.report()
+
+
+def test_audio_duration_is_omitted_when_unknown():
+    watch = timing.Stopwatch()
+    watch.mark("transcription", 1180.0)
+
+    assert "录到音频" not in watch.report()
 
 
 def test_report_flags_exceeding_the_target():

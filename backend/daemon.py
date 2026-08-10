@@ -52,6 +52,7 @@ class _Job:
     index: int
     audio: np.ndarray
     started_at: float
+    dropped: int = 0
     """`perf_counter` at the moment the hotkey came up — the user's t=0."""
 
 
@@ -85,7 +86,12 @@ class DictationDaemon:
         self.scratchpad = Scratchpad(archive=SessionArchive())
         self._idle.set()
         if self.make_mic is None:
-            self.make_mic = lambda: MicSource(device_index=self.config.input_device)
+            self.make_mic = lambda: MicSource(
+                device_index=self.config.input_device,
+                # The queue is the recording in push-to-talk; it has to hold a
+                # whole utterance, not just smooth over a stall.
+                max_chunks=int(self.config.max_utterance_sec * 10) + 50,
+            )
         if self.hotkey_factory is None:
             self.hotkey_factory = self._default_hotkeys
 
@@ -242,6 +248,7 @@ class DictationDaemon:
                 index=self._index,
                 audio=np.concatenate(chunks),
                 started_at=at if at is not None else time.perf_counter(),
+                dropped=getattr(mic, "dropped", 0),
             )
             self._index += 1
             self._idle.clear()
@@ -269,7 +276,9 @@ class DictationDaemon:
 
     def _process(self, job: _Job) -> None:
         watch = Stopwatch(
-            target_ms=TARGET_MS_WITH_POLISH if self._polishing else TARGET_MS_WITHOUT_POLISH
+            target_ms=TARGET_MS_WITH_POLISH if self._polishing else TARGET_MS_WITHOUT_POLISH,
+            dropped_chunks=job.dropped,
+            audio_seconds=len(job.audio) / SAMPLE_RATE,
         )
         watch.mark("hotkey → buffer closed", (time.perf_counter() - job.started_at) * 1000)
 

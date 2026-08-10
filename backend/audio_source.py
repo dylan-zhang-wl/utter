@@ -29,7 +29,17 @@ log = logging.getLogger(__name__)
 
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1600  # 100 ms
-MAX_CHUNKS = 100  # 10 seconds of slack before anything is dropped
+# Big enough to hold an entire utterance, not merely to smooth over a stall.
+#
+# This was 100 chunks — ten seconds — which was correct for a consumer that
+# drains continuously and wrong for the one we actually have. In push-to-talk
+# nothing drains the queue until the key comes up, so the queue *is* the
+# recording. Past ten seconds it began discarding the oldest audio, and the
+# author got back only the tail of what they had said, with no indication that
+# anything was missing. Reported 2026-08-10.
+#
+# 35 seconds: the 30s hard ceiling from design §5.4, plus margin.
+MAX_CHUNKS = 350
 
 
 class AudioSourceError(RuntimeError):
@@ -156,6 +166,11 @@ class MicSource:
         try:
             self._queue.put_nowait(audio)
         except queue.Full:
+            # Something has to give — the callback runs on a realtime thread and
+            # cannot block. Dropping the oldest keeps the most recent speech,
+            # but it is still lost audio, so it is counted and the count is
+            # surfaced all the way to the user's timing report. Silent loss is
+            # the one thing this project does not do.
             try:
                 self._queue.get_nowait()
                 self.dropped += 1

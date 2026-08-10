@@ -31,6 +31,7 @@ class Stage:
 @dataclass
 class Stopwatch:
     dropped_chunks: int = 0
+    audio_seconds: float | None = None
     target_ms: float | None = None
     stages: list[Stage] = field(default_factory=list)
 
@@ -99,8 +100,17 @@ class Stopwatch:
             total += f"   ⚠ over {self.target_ms:.0f} ms"
         lines.append(total)
 
+        if self.audio_seconds is not None:
+            # Printed on every dictation, not only on failure. It is the only
+            # way the user can tell "the model misheard me" apart from "the
+            # recording was shorter than what I said".
+            lines.append(f"  录到音频 {self.audio_seconds:.1f}s")
+
         if self.dropped_chunks:
-            # Audio was thrown away. That is not a debug-log-only fact.
-            lines.append(f"  ⚠ dropped {self.dropped_chunks} audio chunks")
+            lost = self.dropped_chunks / 10
+            lines.append(
+                f"  ⚠ 丢弃了 {self.dropped_chunks} 块音频（约 {lost:.1f} 秒，"
+                "是你说的话的开头部分）"
+            )
 
         return "\n".join(lines)

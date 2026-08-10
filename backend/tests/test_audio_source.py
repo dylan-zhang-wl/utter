@@ -274,3 +274,18 @@ def test_double_stop_is_harmless():
 
 def test_stop_without_start_is_harmless():
     audio_source.MicSource().stop()
+
+
+def test_buffer_holds_a_whole_utterance():
+    """The queue IS the recording in push-to-talk — nothing drains it until the
+    key comes up. At the original 100 chunks it silently discarded everything
+    past ten seconds and returned only the tail. Reported 2026-08-10."""
+    assert audio_source.MAX_CHUNKS * audio_source.CHUNK_SAMPLES / audio_source.SAMPLE_RATE >= 30
+
+
+def test_nothing_is_dropped_within_the_utterance_ceiling():
+    with audio_source.MicSource() as source:
+        for _ in range(300):  # 30 seconds at 100ms per chunk
+            FakeStream.instances[0].deliver(mono())
+
+        assert source.dropped == 0
