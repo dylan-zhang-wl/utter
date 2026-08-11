@@ -10,3 +10,5 @@ target/
 backend/models/
 .DS_Store
 .pytest_cache/
+packaging/Utter.iconset/
+packaging/Utter.icns

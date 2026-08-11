@@ -127,15 +127,13 @@ class MenuBar:
             # Twice: once now, once after the status bar has laid it out. The
             # frame is 32x0 at the origin immediately after creation, which
             # looks alarming and means nothing.
-            # Sampled, not read once. A status item lays out asynchronously —
-            # the frame is 32x0 immediately after creation and only becomes
-            # real a few seconds later — so a single early read says nothing.
-            self._log_placement("刚创建")
-            for delay in (5.0, 20.0, 60.0):
-                AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
-                    delay, False,
-                    lambda _t, d=delay: self._log_placement(f"{d:.0f}秒后"),
-                )
+            # One sample, five seconds in. A status item lays out
+            # asynchronously — the frame is 32x0 immediately after creation and
+            # only becomes real a few seconds later — so reading it at
+            # creation says nothing, which cost an hour to notice.
+            AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+                5.0, False, lambda _t: self._log_placement("5秒后")
+            )
             return True
         except Exception:
             log.warning("could not install the menu bar item", exc_info=True)

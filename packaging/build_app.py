@@ -40,6 +40,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 REPO = Path(__file__).resolve().parent.parent
 APP_NAME = "Utter"
 BUNDLE_ID = "com.dylan.utter"  # matches the Keychain service already in use
@@ -166,6 +168,7 @@ def build(dest_dir: Path, sign: bool = True) -> Path:
         "CFBundleIdentifier": BUNDLE_ID,
         "CFBundleExecutable": APP_NAME,
         "CFBundlePackageType": "APPL",
+        "CFBundleIconFile": "Utter",
         "CFBundleShortVersionString": _version(),
         "CFBundleVersion": _version(),
         # Menu-bar only: no Dock icon, no ⌘Tab entry. Utter is a tool you talk
@@ -179,6 +182,13 @@ def build(dest_dir: Path, sign: bool = True) -> Path:
         "NSAppleEventsUsageDescription":
             "Utter 用它把文字粘贴到你正在编辑的窗口。",
     }))
+
+    # The icon. Drawn rather than shipped as a file — see make_icon.py; it is
+    # the same waveform the overlay draws, in the colour the overlay turns
+    # while recording, so the icon and the running UI are one object.
+    from make_icon import build as build_icon
+
+    build_icon(resources / "Utter.icns")
 
     # The interpreter itself, copied in. TCC judges by code signature, and a
     # Python outside the bundle is not this app — the microphone request was
