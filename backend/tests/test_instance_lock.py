@@ -108,7 +108,7 @@ def test_the_console_script_spelling_is_recognised(tmp_path, monkeypatch):
     import backend.instance_lock as mod
 
     class _Ps:
-        stdout = " 742 /Users/d/.venvs/utter/bin/python /Users/d/.venvs/utter/bin/utter dictate\n"
+        stdout = " 742 /home/u/.venvs/utter/bin/python /home/u/.venvs/utter/bin/utter dictate\n"
 
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Ps())
     assert mod.InstanceLock(tmp_path / "dictate.pid").acquire().pid == 742

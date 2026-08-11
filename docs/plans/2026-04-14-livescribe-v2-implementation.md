@@ -18,7 +18,7 @@ Before starting Task 1, make sure the earlier hot-fix commit from 2026-04-14 nig
 
 Confirm:
 ```bash
-cd "/Users/d/Desktop/华工大/cc cowork/live voice transform"
+cd <repo>
 git status        # should be clean
 git log --oneline -5
 ```
@@ -46,7 +46,7 @@ def test_config_has_vad_defaults():
 **Step 2: Run test — expect fail**
 
 ```bash
-cd "/Users/d/Desktop/华工大/cc cowork/live voice transform"
+cd <repo>
 source .venv/bin/activate
 pytest backend/tests/test_config.py::test_config_has_vad_defaults -v
 ```
