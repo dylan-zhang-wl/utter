@@ -48,6 +48,11 @@ huggingface-hub>=0.23       # tier downloader; reuses ~/.cache/huggingface
 # AXIsProcessTrusted explicitly rather than appearing to work.
 pynput>=1.7 ; sys_platform == "darwin"
 
+# Microphone permission. Not optional on macOS: an app without it does not get
+# an error when it opens a stream, it gets exact zeros forever, and the only
+# way to ask for the permission is to ask — PortAudio never does.
+pyobjc-framework-AVFoundation>=10 ; sys_platform == "darwin"
+
 # --- Google Cloud credentials (Vertex AI, no API key) ------------------------
 # Pure Python, ~1MB, no torch. Vertex takes an OAuth bearer token rather than a
 # key, which is the only way to reach it when the user has Cloud credit but no

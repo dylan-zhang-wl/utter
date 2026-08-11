@@ -51,6 +51,14 @@ DEFAULT_DEST = Path("/Applications")
 VENV_PYTHON = Path.home() / ".venvs" / "utter" / "bin" / "python"
 
 
+def _python_facts() -> tuple[str, str]:
+    """(PYTHONHOME, PYTHONPATH) for the copy that goes inside the bundle."""
+    out = run([str(VENV_PYTHON), "-c",
+               "import sys;print(sys.base_prefix);"
+               "print([p for p in sys.path if 'site-packages' in p][0])"]).stdout.split()
+    return out[0], out[1]
+
+
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True, capture_output=True, text=True, **kw)
 
@@ -172,11 +180,20 @@ def build(dest_dir: Path, sign: bool = True) -> Path:
             "Utter 用它把文字粘贴到你正在编辑的窗口。",
     }))
 
-    # The launcher, with the interpreter path compiled in.
+    # The interpreter itself, copied in. TCC judges by code signature, and a
+    # Python outside the bundle is not this app — the microphone request was
+    # refused outright, with no prompt, and the recordings came back as exact
+    # zeros. A copy in Contents/MacOS gets signed with everything else.
+    real_python = Path(run([str(VENV_PYTHON), "-c",
+                            "import os,sys;print(os.path.realpath(sys.executable))"]).stdout.strip())
+    shutil.copy2(real_python, macos / "python")
+
+    home, site_packages = _python_facts()
     source = REPO / "packaging" / "launcher.c"
     run([
         "clang", "-O2", "-arch", _arch(),
-        f'-DUTTER_PYTHON="{VENV_PYTHON}"',
+        f'-DUTTER_PYTHONHOME="{home}"',
+        f'-DUTTER_PYTHONPATH="{site_packages}:{REPO}"',
         "-o", str(macos / APP_NAME), str(source),
     ])
 
@@ -192,10 +209,15 @@ def build(dest_dir: Path, sign: bool = True) -> Path:
 
     identity = signing_identity() if sign else None
     if identity:
+        # The nested interpreter first, then the bundle. --deep is deprecated
+        # and signs nested code in the wrong order for this layout.
         run(["codesign", "--force", "--sign", identity, "--timestamp=none",
-             "--options", "runtime", str(app)])
+             str(macos / "python")])
+        run(["codesign", "--force", "--sign", identity, "--timestamp=none",
+             str(app)])
         print(f"✓ 用「{identity}」签名，权限不会因重建而丢失。")
     else:
+        run(["codesign", "--force", "--sign", "-", str(macos / "python")])
         run(["codesign", "--force", "--sign", "-", str(app)])
         print(
             "⚠ 用的是 ad-hoc 签名。每次重建 macOS 都会当成一个新 app，\n"

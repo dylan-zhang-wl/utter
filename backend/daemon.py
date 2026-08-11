@@ -174,6 +174,7 @@ class DictationDaemon:
     _locked_at_press: str | None = field(init=False, default=None)
     _level_stop: threading.Event = field(init=False, default_factory=threading.Event)
     _pressed_at: float | None = field(init=False, default=None)
+    _last_device: str | None = field(init=False, default=None)
     _stream_stop: threading.Event | None = field(init=False, default=None)
     _stream_vad_session: object | None = field(init=False, default=None)
     _streaming: bool = field(init=False, default=False)
@@ -505,6 +506,7 @@ class DictationDaemon:
         # 130ms. Closing first put all of that on the user's critical path for
         # no reason — the audio is already in hand by then.
         released = at if at is not None else time.perf_counter()
+        self._last_device = getattr(mic, "device_name", None)
 
         if self._streaming:
             # The streaming reader has been draining the microphone all along
@@ -752,7 +754,21 @@ class DictationDaemon:
                 watch.speech_seconds = self._speech_seconds(job.audio)
                 speaking = watch.speech_seconds >= MIN_SPEECH_SECONDS
         if not speaking:
-            log.info("utterance %d contained no speech, discarded", job.index)
+            # Say what the audio actually looked like. "No speech" on its own
+            # has now sent two separate investigations chasing the model when
+            # the microphone was the problem: which device, how loud, how long.
+            import numpy as _np
+
+            peak = float(_np.abs(job.audio).max()) if len(job.audio) else 0.0
+            log.info(
+                "utterance %d contained no speech, discarded "
+                "(设备=%s 时长=%.1fs 峰值=%.4f%s)",
+                job.index,
+                self._last_device or "?",
+                len(job.audio) / SAMPLE_RATE,
+                peak,
+                "  ← 纯静音，麦克风没收到东西" if peak < 0.001 else "",
+            )
             watch.skip("transcription", "no speech")
             if self.overlay is not None:
                 self.overlay.set_state("error", "没听到")

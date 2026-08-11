@@ -84,6 +84,70 @@ def _notify(title: str, body: str) -> None:
         log.debug("could not post a notification", exc_info=True)
 
 
+def microphone_status() -> str:
+    """notDetermined / denied / authorized, as macOS sees this bundle.
+
+    Worth its own function because the failure it detects is invisible: an app
+    without microphone permission does not get an error when it opens a stream.
+    It gets **exact zeros**, forever. The author pressed the hotkey and Utter
+    said "no speech" — which was true, and said nothing about why.
+
+    A real microphone in a silent room returns room tone around 0.001. A peak
+    of precisely 0.0000 over six seconds is not a quiet room; it is macOS
+    declining.
+    """
+    try:
+        import AVFoundation as AV
+
+        return {
+            0: "未询问", 1: "受限", 2: "已拒绝", 3: "已授权",
+        }.get(AV.AVCaptureDevice.authorizationStatusForMediaType_(AV.AVMediaTypeAudio), "?")
+    except Exception:  # pragma: no cover - bindings missing
+        return "查不到"
+
+
+def request_microphone(log) -> bool:
+    """Ask for the microphone, and wait for the answer.
+
+    Unlike Accessibility, this one *can* be prompted for — but only if
+    something asks. Opening a PortAudio stream does not ask: it just receives
+    silence. So Utter has to ask explicitly, once, at startup.
+    """
+    import threading
+
+    try:
+        import AVFoundation as AV
+    except ImportError:  # pragma: no cover
+        return True  # cannot check; let the recording try
+
+    status = AV.AVCaptureDevice.authorizationStatusForMediaType_(AV.AVMediaTypeAudio)
+    if status == 3:
+        return True
+    if status in (1, 2):
+        log.error("microphone permission denied for this bundle")
+        alert(
+            "Utter 没有麦克风权限",
+            "macOS 拒绝麦克风时不会报错，只会一直给静音 —— 所以听写会说"
+            "「没听到」，而其实是权限的问题。\n\n"
+            "去「系统设置 → 隐私与安全性 → 麦克风」，把 Utter 打开。",
+            settings_url="x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        )
+        return False
+
+    log.info("requesting microphone permission")
+    answered = threading.Event()
+    granted = {"ok": False}
+
+    def done(ok):
+        granted["ok"] = bool(ok)
+        answered.set()
+
+    AV.AVCaptureDevice.requestAccessForMediaType_completionHandler_(AV.AVMediaTypeAudio, done)
+    answered.wait(120)
+    log.info("microphone permission: %s", "granted" if granted["ok"] else "refused")
+    return granted["ok"]
+
+
 def bundle_identity() -> str | None:
     """What macOS thinks this process is.
 
@@ -113,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"executable       {sys.executable}")
         print(f"resources        {os.environ.get('UTTER_APP_RESOURCES', '(unset)')}")
         print(f"accessibility    {'granted' if trusted else 'NOT granted'}")
+        print(f"microphone       {microphone_status()}")
         if not trusted:
             print(reason)
         return 0
@@ -281,6 +346,11 @@ def _run(log) -> int:
 
         if not _wait_for_accessibility(log):
             menu.set_status("⚠ 没有辅助功能权限，热键不工作")
+            return
+
+        menu.set_status("启动中…（正在申请麦克风权限）")
+        if not request_microphone(log):
+            menu.set_status("⚠ 没有麦克风权限，听不到声音")
             return
 
         menu.set_status("启动中…（正在找语音模型）")

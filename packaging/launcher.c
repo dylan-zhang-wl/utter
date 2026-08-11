@@ -40,8 +40,8 @@ static void forward_signal(int signum) {
     }
 }
 
-#ifndef UTTER_PYTHON
-#error "compile with -DUTTER_PYTHON=\"/path/to/venv/bin/python\""
+#ifndef UTTER_PYTHONHOME
+#error "compile with -DUTTER_PYTHONHOME and -DUTTER_PYTHONPATH"
 #endif
 
 int main(int argc, char *argv[]) {
@@ -75,13 +75,30 @@ int main(int argc, char *argv[]) {
      * --check`, which prints the bundle identifier it ends up with. */
     setenv("CFProcessPath", self, 1);
 
+    /* The interpreter lives in the bundle, and that is the whole point.
+     *
+     * Pointing at ~/.venvs/utter/bin/python worked for everything except the
+     * microphone: TCC judges by code signature, not by CFProcessPath, and an
+     * anaconda binary outside the bundle is not this app. The permission
+     * request came back refused in one millisecond with no prompt, and macOS
+     * then handed the recording exact zeros rather than an error.
+     *
+     * A copy of the interpreter inside Contents/MacOS is signed along with the
+     * bundle, so the process asking for the microphone is Utter. It needs
+     * PYTHONHOME to find its standard library, since it is no longer beside
+     * it, and PYTHONPATH for the venv's packages. */
+    char python[4096];
+    snprintf(python, sizeof(python), "%s/MacOS/python", contents);
+    setenv("PYTHONHOME", UTTER_PYTHONHOME, 1);
+    setenv("PYTHONPATH", UTTER_PYTHONPATH, 1);
+
     /* Unbuffered, so the log file is useful while the app is still running
      * rather than only after it exits. */
     setenv("PYTHONUNBUFFERED", "1", 1);
 
     char *args[8];
     int n = 0;
-    args[n++] = (char *)UTTER_PYTHON;
+    args[n++] = python;
     args[n++] = "-m";
     args[n++] = "backend.app";
     for (int i = 1; i < argc && n < 7; i++) {
@@ -102,9 +119,19 @@ int main(int argc, char *argv[]) {
      * Keeping this process alive as the thing LaunchServices launched, with
      * Python as its child, gives both halves what they need. The child sets
      * CFProcessPath so it still belongs to the bundle for permissions. */
+    if (getenv("UTTER_EXEC") != NULL) {
+        /* exec: the process BECOMES Python, keeping this bundle's identity, so
+         * macOS attributes the microphone and Accessibility grants to Utter.
+         * A spawned child is a foreign binary and the microphone request is
+         * refused outright — measured, 1ms, no prompt. */
+        execv(python, args);
+        fprintf(stderr, "Utter: could not exec %s: %s\n", python, strerror(errno));
+        return 1;
+    }
+
     pid_t child;
-    if (posix_spawn(&child, UTTER_PYTHON, NULL, NULL, args, environ) != 0) {
-        fprintf(stderr, "Utter: could not start %s: %s\n", UTTER_PYTHON, strerror(errno));
+    if (posix_spawn(&child, python, NULL, NULL, args, environ) != 0) {
+        fprintf(stderr, "Utter: could not start %s: %s\n", python, strerror(errno));
         return 1;
     }
 

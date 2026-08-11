@@ -182,6 +182,7 @@ class MicSource:
         #: was never recorded — the number they have been describing as "the
         #: first second or two goes missing".
         self.first_chunk_at: float | None = None
+        self.device_name: str | None = None
 
     # -- lifecycle --
 
@@ -214,6 +215,15 @@ class MicSource:
             callback=self._on_audio,
         )
         self._stream.start()
+        # Which device this actually opened, by name. The index is not enough:
+        # indices shift when hardware comes and goes, and "device 1" in a log
+        # written an hour ago may mean something else now.
+        try:
+            self.device_name = sd.query_devices(
+                self.device_index if self.device_index is not None else sd.default.device[0]
+            )["name"]
+        except Exception:  # pragma: no cover - defensive
+            self.device_name = "?"
         return self
 
     def stop(self) -> None:
