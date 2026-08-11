@@ -24,9 +24,10 @@ IDLE_SYMBOL, BUSY_SYMBOL = "waveform", "waveform.circle.fill"
 class MenuBar:
     """NSStatusItem with a small menu. All AppKit; construct on the main thread."""
 
-    def __init__(self, daemon, on_quit=None):
+    def __init__(self, daemon, on_quit=None, window=None):
         self.daemon = daemon
         self.on_quit = on_quit
+        self.window = window
         self._item = None
         self._delegate = None
         self._status = None
@@ -38,7 +39,14 @@ class MenuBar:
 
             outer = self
 
-            class _Delegate(AppKit.NSObject):
+            # Named, not `_Delegate`: Objective-C classes share one flat
+            # namespace across the process, so a second `_Delegate` anywhere
+            # fails to register and takes its whole window with it.
+            class UtterMenuDelegate(AppKit.NSObject):
+                def openWindow_(self, _sender):
+                    if outer.window is not None:
+                        outer.window.show()
+
                 def togglePolish_(self, _sender):
                     want = not outer.daemon.config.polish_enabled
                     on, why = outer.daemon.set_polish(want)
@@ -113,7 +121,7 @@ class MenuBar:
                         outer.on_quit()
                     AppKit.NSApp().terminate_(None)
 
-            self._delegate = _Delegate.alloc().init()
+            self._delegate = UtterMenuDelegate.alloc().init()
             bar = AppKit.NSStatusBar.systemStatusBar()
             self._item = bar.statusItemWithLength_(AppKit.NSVariableStatusItemLength)
             self._set_symbol(IDLE_SYMBOL)
@@ -275,6 +283,9 @@ class MenuBar:
             # a terminal that no longer exists.
             if self._status:
                 add(self._status, None, False)
+                menu.addItem_(AppKit.NSMenuItem.separatorItem())
+            if self.window is not None:
+                add("打开主界面…", "openWindow:")
                 menu.addItem_(AppKit.NSMenuItem.separatorItem())
             add(f"按住 {config.hotkey_push or '未设置'}　　说一句", None, False)
             add(

@@ -264,6 +264,7 @@ def _run(log) -> int:
     from backend.instance_lock import InstanceLock
     from backend.menubar import MenuBar
     from backend.overlay import Overlay
+    from backend.window import MainWindow
 
     lock = InstanceLock(DEFAULT_DIR / "dictate.pid")
     owner = lock.acquire()
@@ -290,7 +291,8 @@ def _run(log) -> int:
 
     app = AppKit.NSApplication.sharedApplication()
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
-    menu = MenuBar(daemon, on_quit=daemon.stop)
+    window = MainWindow(daemon, on_quit=daemon.stop)
+    menu = MenuBar(daemon, on_quit=daemon.stop, window=window)
     menu.install()
     menu.set_status("启动中…")
 
