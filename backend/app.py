@@ -268,7 +268,13 @@ def _run(log) -> int:
     lock = InstanceLock(DEFAULT_DIR / "dictate.pid")
     owner = lock.acquire()
     if owner is not None:
-        alert("Utter 已经在运行", owner.message())
+        # A banner, not a modal. NSAlert.runModal blocks until someone clicks,
+        # and this app has no window, no Dock icon and no way to bring the
+        # dialog forward — so a second launch hung indefinitely with nothing on
+        # screen, which is the same failure the whole startup path was just
+        # rewritten to avoid.
+        log.info("another instance is running (pid %s); exiting", owner.pid)
+        _notify("Utter 已经在运行", f"进程号 {owner.pid}。菜单栏图标就是它。")
         return 1
 
     config = load()
