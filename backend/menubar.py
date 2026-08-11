@@ -31,6 +31,7 @@ class MenuBar:
         self._item = None
         self._delegate = None
         self._status = None
+        self._menu = None
 
     def install(self) -> bool:
         try:
@@ -45,6 +46,19 @@ class MenuBar:
             class UtterMenuDelegate(AppKit.NSObject):
                 def openWindow_(self, _sender):
                     if outer.window is not None:
+                        outer.window.show()
+
+                def iconClicked_(self, sender):
+                    import AppKit
+
+                    event = AppKit.NSApp().currentEvent()
+                    right = event is not None and event.type() in (
+                        AppKit.NSEventTypeRightMouseDown,
+                    )
+                    if right or (event is not None
+                                 and event.modifierFlags() & AppKit.NSEventModifierFlagControl):
+                        outer._popup_menu()
+                    elif outer.window is not None:
                         outer.window.show()
 
                 def togglePolish_(self, _sender):
@@ -124,6 +138,15 @@ class MenuBar:
             self._delegate = UtterMenuDelegate.alloc().init()
             bar = AppKit.NSStatusBar.systemStatusBar()
             self._item = bar.statusItemWithLength_(AppKit.NSVariableStatusItemLength)
+            # A click opens the window; the menu is the right-click. The menu
+            # had grown into the settings UI by accident, with explanations in
+            # it, and a menu is the wrong place to read anything twice.
+            button = self._item.button()
+            button.setTarget_(self._delegate)
+            button.setAction_("iconClicked:")
+            button.sendActionOn_(
+                AppKit.NSEventMaskLeftMouseDown | AppKit.NSEventMaskRightMouseDown)
+
             self._set_symbol(IDLE_SYMBOL)
             self._rebuild()
 
@@ -166,6 +189,25 @@ class MenuBar:
             )
         except Exception:  # pragma: no cover
             log.warning("could not read the status item placement", exc_info=True)
+
+    def _popup_menu(self) -> None:
+        """Show the menu under the icon, on right-click.
+
+        The status item no longer owns a menu — owning one would swallow the
+        left click, and the left click is how the window opens now — so it is
+        popped by hand.
+        """
+        try:
+            import AppKit
+
+            self._rebuild_now()
+            if self._menu is None:
+                return
+            button = self._item.button()
+            self._menu.popUpMenuPositioningItem_atLocation_inView_(
+                None, AppKit.NSMakePoint(0, button.bounds().size.height + 4), button)
+        except Exception:  # pragma: no cover
+            log.warning("could not show the menu", exc_info=True)
 
     def set_status(self, text: str | None) -> None:
         """A line at the top of the menu, or None to clear it.
@@ -231,11 +273,11 @@ class MenuBar:
 
             shared = shared_with_output(config.input_device)
             if shared:
-                lines.append(f"⚠ {shared} 同时是麦克风和扬声器 —— 会拖慢开麦、降低识别")
+                lines.append(f"⚠ {shared} 同时是麦克风和扬声器")
         except Exception:  # pragma: no cover
             pass
         if config.polish_enabled and self.daemon.polish is None:
-            lines.append("⚠ 润色开着但用不了 —— 点这里自检")
+            lines.append("⚠ 润色用不了")
         return lines
 
     def _providers(self):
@@ -263,117 +305,35 @@ class MenuBar:
         _on_main(self._rebuild_now)
 
     def _rebuild_now(self) -> None:
+        """Four items. It used to be fourteen, with a paragraph in one of them.
+
+        A menu is glanced at; a settings window is read. Every control that
+        needed a label longer than its own name moved to the window, and the
+        shared-microphone warning became one line instead of a sentence
+        explaining itself.
+        """
         try:
             import AppKit
 
-            config = self.daemon.config
             menu = AppKit.NSMenu.alloc().init()
 
             def add(title, action=None, enabled=True):
                 item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                    title, action, ""
-                )
+                    title, action, "")
                 if action:
                     item.setTarget_(self._delegate)
                 item.setEnabled_(enabled)
                 menu.addItem_(item)
 
-            # Both gestures, because the author kept having to remember which
-            # key did which, and the answer lived only in the startup banner of
-            # a terminal that no longer exists.
             if self._status:
                 add(self._status, None, False)
                 menu.addItem_(AppKit.NSMenuItem.separatorItem())
-            if self.window is not None:
-                add("打开主界面…", "openWindow:")
-                menu.addItem_(AppKit.NSMenuItem.separatorItem())
-            add(f"按住 {config.hotkey_push or '未设置'}　　说一句", None, False)
-            add(
-                f"双击 {config.hotkey_toggle or '未设置'}　　"
-                f"{'边说边出字' if config.stream_while_speaking else '长段口述'}"
-                "（再双击停）",
-                None, False,
-            )
-            for warning in self._warnings(config):
-                add(warning, "runDoctor:")
-            menu.addItem_(AppKit.NSMenuItem.separatorItem())
-            add(
-                f"边说边出字：{'开' if config.stream_while_speaking else '关'}"
-                f"（{config.hotkey_toggle or '未设置'} 双击）",
-                "toggleStreaming:",
-            )
-            add(
-                f"润色：{'开（' + config.polish_level + '）' if config.polish_enabled else '关'}",
-                "togglePolish:",
-            )
-            if config.polish_enabled:
-                # Only the levels 铁律 10 defines, and the name says what each
-                # one is allowed to touch — "medium" tells the author nothing
-                # about what a model is about to do to their argument.
-                levels = AppKit.NSMenu.alloc().init()
-                for value, label in (
-                    ("light", "轻 —— 只补标点"),
-                    ("medium", "中 —— 标点 + 删口水词"),
-                    ("heavy", "重 —— 标点 + 口水词 + 分段"),
-                ):
-                    item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                        label, "pickPolishLevel:", ""
-                    )
-                    item.setTarget_(self._delegate)
-                    item.setRepresentedObject_(value)
-                    item.setState_(1 if config.polish_level == value else 0)
-                    levels.addItem_(item)
-                holder = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                    "  润色档位", None, ""
-                )
-                menu.addItem_(holder)
-                menu.setSubmenu_forItem_(levels, holder)
-
-            # Switching engines and languages is the whole comparison the author
-            # is running. Making it cost a terminal visit is how a comparison
-            # quietly does not get run.
-            models = AppKit.NSMenu.alloc().init()
-            for pid, label in self._providers():
-                item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                    label, "pickModel:", ""
-                )
-                item.setTarget_(self._delegate)
-                item.setRepresentedObject_(pid)
-                item.setState_(1 if getattr(self.daemon.stt, "id", "") == pid else 0)
-                models.addItem_(item)
-            holder = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                f"模型：{getattr(self.daemon.stt, 'display_name', '?')}", None, ""
-            )
-            menu.addItem_(holder)
-            menu.setSubmenu_forItem_(models, holder)
-
-            languages = AppKit.NSMenu.alloc().init()
-            for value, label in (("auto", "自动检测"), ("zh", "中文"), ("en", "English")):
-                item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                    label, "pickLanguage:", ""
-                )
-                item.setTarget_(self._delegate)
-                item.setRepresentedObject_(value)
-                current = config.dictate_language or "auto"
-                item.setState_(1 if current == value else 0)
-                languages.addItem_(item)
-            holder = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                f"语言：{config.dictate_language or '自动'}", None, ""
-            )
-            menu.addItem_(holder)
-            menu.setSubmenu_forItem_(languages, holder)
-            add(
-                f"输出：{'光标处' if config.dictate_target == 'cursor' else '暂存区'}",
-                "toggleTarget:",
-            )
-            menu.addItem_(AppKit.NSMenuItem.separatorItem())
-            add(f"本次已听写 {len(self.daemon.scratchpad)} 段", None, False)
-            add("打开存档", "openArchive:")
-            add("自检（诊断）…", "runDoctor:")
-            add("编辑设置…", "openConfig:")
+            for warning in self._warnings(self.daemon.config):
+                add(warning, "openWindow:")
+            add("设置…", "openWindow:")
             menu.addItem_(AppKit.NSMenuItem.separatorItem())
             add("退出 Utter", "quit:")
 
-            self._item.setMenu_(menu)
+            self._menu = menu
         except Exception:  # pragma: no cover
             log.warning("could not rebuild the menu", exc_info=True)
