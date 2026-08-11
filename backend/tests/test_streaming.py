@@ -216,14 +216,16 @@ def test_the_menu_toggle_for_streaming_survives_a_restart(tmp_path, monkeypatch)
 # --- a clause is not a sentence -------------------------------------------------
 
 
-def test_a_streamed_clause_does_not_get_a_full_stop():
-    """close_sentence exists because Whisper leaves a *held* utterance open
-    mid-breath, and one hold is one thought. A live clause is not: the author's
-    paragraph came out as
+def test_a_streamed_clause_is_closed_by_the_pause_that_followed_it():
+    """Two wrong answers came before this one, both of them guesses about where
+    the sentence ends:
 
-        但是这个延迟。好像。还是比较多的。
+        close every clause      -> 但是这个延迟。好像。还是比较多的。
+        close none of them      -> 但是这个延迟好像还是比较多的
 
-    because every clause was closed as though it were a sentence."""
+    The speaker already answered by pausing, and the VAD measured it. A breath
+    is a comma; a long gap is a full stop. Nothing is invented — only a mark is
+    added, which 铁律 10 has always allowed."""
     injector = FakeInjector()
     d = build([clause()], stt=FakeStt(texts=["而且"]),
               injector=injector, config=AppConfig(close_sentences=True))
@@ -235,7 +237,9 @@ def test_a_streamed_clause_does_not_get_a_full_stop():
     d.end_utterance(); d.wait_idle(); d.stop()
 
     assert injector.injected, "nothing was injected"
-    assert injector.injected[0][1] == "而且", "a clause must not be closed"
+    # The scripted segmenter reports no gap for the first clause, so it takes
+    # the conservative mark rather than ending a sentence that may continue.
+    assert injector.injected[0][1] == "而且，"
 
 
 def test_a_held_utterance_still_gets_one():

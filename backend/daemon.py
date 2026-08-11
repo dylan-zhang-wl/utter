@@ -42,7 +42,12 @@ from backend.hotkey import HotkeyError, HotkeyEvent, HotkeyListener
 from backend.injection import Injector
 from backend.pipeline import Utterance
 from backend.providers.llm import strip_fillers
-from backend.punctuation import close_sentence, collapse_repetition, is_hallucination
+from backend.punctuation import (
+    close_sentence,
+    collapse_repetition,
+    is_hallucination,
+    punctuate_pause,
+)
 from backend.punctuation import normalise as normalise_punctuation
 from backend.scratchpad import Scratchpad, SessionArchive
 from backend.timing import Stopwatch
@@ -139,6 +144,12 @@ class _Job:
     """One clause of a live session rather than a whole held utterance. Both
     the full stop and the polish call are wrong for a clause, for different
     reasons — see _process_inner."""
+    gap_ms: float | None = None
+    """Silence before this clause. The speaker's own answer to "did that
+    sentence end", which is the question Whisper cannot answer about a
+    fragment."""
+    final: bool = False
+    """The last clause of a streaming session, which always closes."""
 
 
 @dataclass
@@ -597,11 +608,17 @@ class DictationDaemon:
         )
         started = time.perf_counter()
 
-        def emit(event) -> None:
+        previous_end = {"sample": None}
+
+        def emit(event, final: bool = False) -> None:
             if not isinstance(event, SpeechEnd) or not len(event.audio):
                 return
+            gap = None
+            if previous_end["sample"] is not None:
+                gap = (event.start_sample - previous_end["sample"]) / SAMPLE_RATE * 1000
+            previous_end["sample"] = event.end_sample
             self._enqueue(event.audio, started_at=time.perf_counter(), held=None,
-                          streamed=True)
+                          streamed=True, gap_ms=gap, final=final)
             if self.overlay is not None:
                 # A clause just left for the model; say so, then go back to
                 # listening, because the microphone is still open.
@@ -617,7 +634,7 @@ class DictationDaemon:
             time.sleep(0.05)
 
         for event in segmenter.flush():
-            emit(event)
+            emit(event, final=True)
 
         # The reader owns the panel for the length of the session, so it is the
         # one that puts it away — after the worker has drained, or the last
@@ -642,7 +659,8 @@ class DictationDaemon:
 
     def _enqueue(self, audio: np.ndarray, *, started_at: float, held: float | None,
                  dropped: int = 0, overflows: int = 0, mic_open: float | None = None,
-                 streamed: bool = False) -> None:
+                 streamed: bool = False, gap_ms: float | None = None,
+                 final: bool = False) -> None:
         job = _Job(
             index=self._index,
             audio=audio,
@@ -652,6 +670,8 @@ class DictationDaemon:
             held=held,
             mic_open=mic_open,
             streamed=streamed,
+            gap_ms=gap_ms,
+            final=final,
         )
         self._index += 1
         self._idle.clear()
@@ -804,7 +824,10 @@ class DictationDaemon:
         # punctuation style across a code-switch, so a bilingual sentence comes
         # back with Chinese commas after English clauses.
         raw, repeats = collapse_repetition(normalise_punctuation((raw or "").strip()))
-        if self.config.close_sentences and not job.streamed:
+        if job.streamed:
+            # The speaker's pause decides, not the model. See punctuate_pause.
+            raw = punctuate_pause(raw, job.gap_ms, final=job.final)
+        elif self.config.close_sentences:
             # Not on a streamed clause. close_sentence exists because Whisper
             # leaves a held utterance open mid-breath, and one hold is one
             # thought — but in a live session each clause is its own utterance,

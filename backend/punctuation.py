@@ -210,3 +210,42 @@ def is_hallucination(text: str) -> bool:
             matched = True
             remainder = remainder.replace(needle, "")
     return matched and len(remainder) <= _HALLUCINATION_REMAINDER
+
+
+# How long a pause has to be before it reads as the end of a sentence rather
+# than the end of a clause. Measured against the author's own dictation: the
+# breaths between clauses run 300-500ms, and the gaps where they finished a
+# thought run past a second.
+SENTENCE_PAUSE_MS = 800
+
+_ENDS_A_CLAUSE = "，。？！、；：,.?!;:…—"
+
+
+def punctuate_pause(text: str, gap_ms: float | None, *, final: bool = False) -> str:
+    """Close a streamed clause using the pause the speaker actually left.
+
+    Streaming produces clauses of one to three seconds, and Whisper does not
+    punctuate a fragment — handed 「而且」 it returns 「而且」. Two wrong answers
+    were tried before this one:
+
+      * close every clause like a sentence, which gave
+        「但是这个延迟。好像。还是比较多的。」
+      * close none of them, which gave a paragraph with no punctuation at all
+
+    Both were guesses about where the sentence ends. The speaker already
+    answered that question by pausing, and the VAD measured it. A short breath
+    is a comma; a long one is a full stop; the end of the session is a full
+    stop. No model is involved and nothing is invented — the only thing added
+    is a mark, which 铁律 10 has always allowed.
+    """
+    stripped = text.rstrip()
+    if not stripped:
+        return text
+    if stripped[-1] in _ENDS_A_CLAUSE:
+        return stripped  # Whisper already decided; leave it alone
+
+    if final:
+        return stripped + "。"
+    if gap_ms is None:
+        return stripped + "，"
+    return stripped + ("。" if gap_ms >= SENTENCE_PAUSE_MS else "，")

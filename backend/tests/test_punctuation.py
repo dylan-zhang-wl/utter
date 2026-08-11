@@ -172,3 +172,46 @@ def test_a_real_sentence_that_mentions_one_is_kept(text):
 
 def test_an_empty_transcript_is_not_a_hallucination():
     assert is_hallucination("   ") is False
+
+
+# --- streamed clauses are closed by the speaker's own pause ---------------------
+
+
+def test_a_breath_is_a_comma():
+    from backend.punctuation import punctuate_pause
+
+    assert punctuate_pause("而且", 400) == "而且，"
+
+
+def test_a_long_pause_is_a_full_stop():
+    from backend.punctuation import punctuate_pause
+
+    assert punctuate_pause("还是比较多的", 1200) == "还是比较多的。"
+
+
+def test_the_end_of_a_session_always_closes():
+    from backend.punctuation import punctuate_pause
+
+    assert punctuate_pause("是什么情况", 200, final=True) == "是什么情况。"
+
+
+def test_whispers_own_punctuation_is_left_alone():
+    """It knows more than the pause does when it bothers to answer."""
+    from backend.punctuation import punctuate_pause
+
+    assert punctuate_pause("好的。", 400) == "好的。"
+    assert punctuate_pause("是吗？", 1500) == "是吗？"
+
+
+def test_an_unknown_gap_takes_the_conservative_mark():
+    """The first clause of a session has nothing before it. A comma can be
+    followed by more; a full stop cannot be taken back (铁律 9)."""
+    from backend.punctuation import punctuate_pause
+
+    assert punctuate_pause("那现在", None) == "那现在，"
+
+
+def test_an_empty_clause_is_left_empty():
+    from backend.punctuation import punctuate_pause
+
+    assert punctuate_pause("   ", 400).strip() == ""
