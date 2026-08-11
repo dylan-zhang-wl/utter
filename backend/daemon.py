@@ -41,6 +41,7 @@ from backend.config import AppConfig
 from backend.hotkey import HotkeyError, HotkeyEvent, HotkeyListener
 from backend.injection import Injector
 from backend.pipeline import Utterance
+from backend.providers.llm import strip_fillers
 from backend.punctuation import close_sentence, collapse_repetition, is_hallucination
 from backend.punctuation import normalise as normalise_punctuation
 from backend.scratchpad import Scratchpad, SessionArchive
@@ -134,6 +135,10 @@ class _Job:
     mic_open: float | None = None
     """Milliseconds from the key going down to the first frame of audio. This
     is the opening of the author's first word, and it is simply gone."""
+    streamed: bool = False
+    """One clause of a live session rather than a whole held utterance. Both
+    the full stop and the polish call are wrong for a clause, for different
+    reasons — see _process_inner."""
 
 
 @dataclass
@@ -595,7 +600,8 @@ class DictationDaemon:
         def emit(event) -> None:
             if not isinstance(event, SpeechEnd) or not len(event.audio):
                 return
-            self._enqueue(event.audio, started_at=time.perf_counter(), held=None)
+            self._enqueue(event.audio, started_at=time.perf_counter(), held=None,
+                          streamed=True)
             if self.overlay is not None:
                 # A clause just left for the model; say so, then go back to
                 # listening, because the microphone is still open.
@@ -635,7 +641,8 @@ class DictationDaemon:
         return self._stream_vad_session
 
     def _enqueue(self, audio: np.ndarray, *, started_at: float, held: float | None,
-                 dropped: int = 0, overflows: int = 0, mic_open: float | None = None) -> None:
+                 dropped: int = 0, overflows: int = 0, mic_open: float | None = None,
+                 streamed: bool = False) -> None:
         job = _Job(
             index=self._index,
             audio=audio,
@@ -644,6 +651,7 @@ class DictationDaemon:
             overflows=overflows,
             held=held,
             mic_open=mic_open,
+            streamed=streamed,
         )
         self._index += 1
         self._idle.clear()
@@ -796,7 +804,16 @@ class DictationDaemon:
         # punctuation style across a code-switch, so a bilingual sentence comes
         # back with Chinese commas after English clauses.
         raw, repeats = collapse_repetition(normalise_punctuation((raw or "").strip()))
-        if self.config.close_sentences:
+        if self.config.close_sentences and not job.streamed:
+            # Not on a streamed clause. close_sentence exists because Whisper
+            # leaves a held utterance open mid-breath, and one hold is one
+            # thought — but in a live session each clause is its own utterance,
+            # so 「而且」 came back as 「而且。」 and the author's paragraph read
+            #
+            #     但是这个延迟。好像。还是比较多的。
+            #
+            # The clauses are meant to join into a sentence, and Whisper's own
+            # punctuation already knows where the sentence ends.
             raw = close_sentence(raw)
         if repeats:
             # The bounded temperature ladder is supposed to escape these, and on
@@ -824,7 +841,20 @@ class DictationDaemon:
             return
 
         text, polished = raw, False
-        if self._polishing:
+        if self._polishing and job.streamed:
+            # Streaming and polish pull against each other, and streaming wins
+            # while the microphone is open.
+            #
+            # Measured on the author's session: clauses of 0.7 to 2.8 seconds
+            # were taking 3.4-4.1 seconds end to end, and most of that was one
+            # LLM round trip per clause. Worse, a 0.7-second 「而且」 gives the
+            # model nothing to work with — punctuation is a judgement about a
+            # sentence, and a clause is not one.
+            #
+            # Filler removal still happens: that is ours, mechanical, and free.
+            watch.skip("polish", "流式不润色")
+            text = strip_fillers(raw) if self.config.polish_level != "light" else raw
+        elif self._polishing:
             with watch.span("polish"):
                 text, polished = self._safe_polish(raw)
         else:

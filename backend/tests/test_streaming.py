@@ -211,3 +211,75 @@ def test_the_menu_toggle_for_streaming_survives_a_restart(tmp_path, monkeypatch)
     d._save_config()
 
     assert cfg.load().stream_while_speaking is False
+
+
+# --- a clause is not a sentence -------------------------------------------------
+
+
+def test_a_streamed_clause_does_not_get_a_full_stop():
+    """close_sentence exists because Whisper leaves a *held* utterance open
+    mid-breath, and one hold is one thought. A live clause is not: the author's
+    paragraph came out as
+
+        但是这个延迟。好像。还是比较多的。
+
+    because every clause was closed as though it were a sentence."""
+    injector = FakeInjector()
+    d = build([clause()], stt=FakeStt(texts=["而且"]),
+              injector=injector, config=AppConfig(close_sentences=True))
+    d.start()
+    d.begin_utterance(stream=True)
+    deadline = time.time() + 5
+    while not injector.injected and time.time() < deadline:
+        time.sleep(0.05)
+    d.end_utterance(); d.wait_idle(); d.stop()
+
+    assert injector.injected, "nothing was injected"
+    assert injector.injected[0][1] == "而且", "a clause must not be closed"
+
+
+def test_a_held_utterance_still_gets_one():
+    d_injector = FakeInjector()
+    d = build([clause()], stt=FakeStt(texts=["这是一句话"]),
+              injector=d_injector, config=AppConfig(close_sentences=True))
+    d.start()
+    d.begin_utterance(stream=False)
+    d.end_utterance(); d.wait_idle(); d.stop()
+
+    assert d_injector.injected[0][1].endswith("。")
+
+
+def test_streaming_does_not_pay_for_an_llm_round_trip_per_clause():
+    """0.7-second clauses were taking 3.7 seconds end to end, nearly all of it
+    one polish call each — and a 0.7-second 「而且」 gives a model nothing to
+    punctuate anyway. Punctuation is a judgement about a sentence."""
+    calls = []
+
+    def slow_polish(text, context=None):
+        calls.append(text)
+        return text + "。"
+
+    injector = FakeInjector()
+    d = build([clause()], stt=FakeStt(texts=["而且"]), injector=injector,
+              polish=slow_polish,
+              config=AppConfig(polish_enabled=True, polish_level="medium"))
+    d.start()
+    d.begin_utterance(stream=True)
+    deadline = time.time() + 5
+    while not injector.injected and time.time() < deadline:
+        time.sleep(0.05)
+    d.end_utterance(); d.wait_idle(); d.stop()
+
+    assert calls == [], "the model must not be called per clause while streaming"
+
+
+def test_push_to_talk_still_polishes():
+    calls = []
+    d = build([clause()], stt=FakeStt(texts=["这是一句话"]),
+              polish=lambda text, context=None: calls.append(text) or text,
+              config=AppConfig(polish_enabled=True))
+    d.start()
+    d.begin_utterance(stream=False)
+    d.end_utterance(); d.wait_idle(); d.stop()
+
+    assert calls, "holding the key is where polish belongs"
