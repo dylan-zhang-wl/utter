@@ -176,8 +176,29 @@ def _wait_for_accessibility(log) -> bool:
 
 
 def _run(log) -> int:
+    """Put the icon on screen first, then do everything slow behind it.
+
+    Order matters more than it looks. Every version of this before now did the
+    slow work first and created the menu bar item last, so double-clicking
+    Utter produced nothing on screen for as long as it took — measured at 79
+    seconds on a cold page cache, and there is no Dock icon and no window to
+    say otherwise. The author reported the app would not open, which was the
+    only conclusion the evidence supported.
+
+    Three things are slow and all of them are now behind the run loop:
+    resolving the speech provider (a network call to Hugging Face), waiting on
+    the Accessibility grant, and warming the model. None of them needs the main
+    thread.
+    """
+    import threading
+
+    import AppKit
+
     from backend.config import DEFAULT_DIR, load
+    from backend.daemon import DictationDaemon
     from backend.instance_lock import InstanceLock
+    from backend.menubar import MenuBar
+    from backend.overlay import Overlay
 
     lock = InstanceLock(DEFAULT_DIR / "dictate.pid")
     owner = lock.acquire()
@@ -187,58 +208,67 @@ def _run(log) -> int:
 
     config = load()
 
-    # Accessibility never prompts on its own, and without it the hotkey
-    # receives nothing and raises nothing.
-    if not _wait_for_accessibility(log):
-        lock.release()
-        return 1
-
-    from backend.cli import build_polish
-    from backend.daemon import DictationDaemon
-    from backend.overlay import Overlay
-    from backend.providers.stt import NoProviderAvailable, get_stt_provider
-
-    try:
-        stt = get_stt_provider(preferred=config.stt_provider)
-    except NoProviderAvailable as exc:
-        alert("Utter 找不到可用的语音模型", f"{exc}\n\n日志：{LOG_PATH}")
-        lock.release()
-        return 1
-
+    # `stt=None` until the provider resolves. The menu reads it with getattr and
+    # a default, so it renders fine in the meantime.
     daemon = DictationDaemon(
         config=config,
-        stt=stt,
-        polish=build_polish(config),
-        polish_factory=build_polish,
+        stt=None,
         on_text=lambda u: log.info("dictated: %s", u.text),
         overlay=Overlay(),
     )
 
+    app = AppKit.NSApplication.sharedApplication()
+    app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+    menu = MenuBar(daemon, on_quit=daemon.stop)
+    menu.install()
+    menu.set_status("启动中…")
+
+    def bring_up():
+        from backend.cli import build_polish
+        from backend.providers.stt import NoProviderAvailable, get_stt_provider
+
+        if not _wait_for_accessibility(log):
+            menu.set_status("⚠ 没有辅助功能权限，热键不工作")
+            return
+
+        menu.set_status("启动中…（正在找语音模型）")
+        try:
+            daemon.stt = get_stt_provider(preferred=config.stt_provider)
+        except NoProviderAvailable as exc:
+            menu.set_status("⚠ 找不到语音模型")
+            alert("Utter 找不到可用的语音模型", f"{exc}\n\n日志：{LOG_PATH}")
+            return
+
+        daemon.polish = build_polish(config)
+        daemon.polish_factory = build_polish
+
+        menu.set_status("启动中…（正在预热模型，首次可能要一分钟）")
+        try:
+            daemon.start()
+        except Exception as exc:
+            log.exception("daemon failed to start")
+            menu.set_status(f"⚠ 启动失败：{exc}")
+            alert("Utter 启动失败", f"{exc}\n\n日志：{LOG_PATH}")
+            return
+
+        menu.set_status(None)
+        log.info("ready; hotkey=%s", config.hotkey_push)
+        _notify(
+            "Utter 就绪",
+            f"按住 {config.hotkey_push} 说一句；双击 {config.hotkey_toggle} 边说边出字。",
+        )
+
+    threading.Thread(target=bring_up, daemon=True, name="utter-start").start()
+
+    import signal
+
+    signal.signal(signal.SIGINT, lambda *_: app.terminate_(None))
+    # A no-op timer keeps the run loop responsive to signals; without it AppKit
+    # can sit in mach_msg and ignore Ctrl-C entirely.
+    AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(0.3, True, lambda _t: None)
+
     try:
-        daemon.start()
-    except Exception as exc:
-        alert("Utter 启动失败", f"{exc}\n\n日志：{LOG_PATH}")
-        lock.release()
-        return 1
-
-    log.info("ready; hotkey=%s", config.hotkey_push)
-
-    # Say so out loud, once.
-    #
-    # A menu-bar app with no Dock icon and no window gives the user nothing to
-    # look at, and if the menu bar is crowded macOS silently hides the icon
-    # rather than shrinking anything. The author double-clicked a running,
-    # healthy Utter and reported "I can't open it any more", which is the
-    # correct conclusion from the evidence they had: nothing appeared.
-    _notify(
-        "Utter 就绪",
-        f"按住 {config.hotkey_push} 说一句；双击 {config.hotkey_toggle} 边说边出字。"
-        "图标在菜单栏（波形）。",
-    )
-    try:
-        from backend.cli import _run_with_ui
-
-        _run_with_ui(daemon)
+        app.run()
     finally:
         daemon.stop()
         lock.release()

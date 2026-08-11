@@ -27,6 +27,7 @@ class MenuBar:
         self.on_quit = on_quit
         self._item = None
         self._delegate = None
+        self._status = None
 
     def install(self) -> bool:
         try:
@@ -120,6 +121,16 @@ class MenuBar:
             log.warning("could not install the menu bar item", exc_info=True)
             return False
 
+    def set_status(self, text: str | None) -> None:
+        """A line at the top of the menu, or None to clear it.
+
+        Exists so the icon can go up before the model has finished warming.
+        Warm-up has been measured between 1.7 and 77 seconds, and for all of
+        that time the app previously showed nothing at all.
+        """
+        self._status = text
+        self._rebuild()
+
     def set_busy(self, busy: bool) -> None:
         self._set_symbol(BUSY_SYMBOL if busy else IDLE_SYMBOL)
 
@@ -202,6 +213,9 @@ class MenuBar:
             # Both gestures, because the author kept having to remember which
             # key did which, and the answer lived only in the startup banner of
             # a terminal that no longer exists.
+            if self._status:
+                add(self._status, None, False)
+                menu.addItem_(AppKit.NSMenuItem.separatorItem())
             add(f"按住 {config.hotkey_push or '未设置'}　　说一句", None, False)
             add(
                 f"双击 {config.hotkey_toggle or '未设置'}　　"
