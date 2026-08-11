@@ -26,6 +26,19 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <mach-o/dyld.h>
+#include <spawn.h>
+#include <signal.h>
+#include <sys/wait.h>
+
+extern char **environ;
+
+static pid_t child_pid = 0;
+
+static void forward_signal(int signum) {
+    if (child_pid > 0) {
+        kill(child_pid, signum);
+    }
+}
 
 #ifndef UTTER_PYTHON
 #error "compile with -DUTTER_PYTHON=\"/path/to/venv/bin/python\""
@@ -76,10 +89,34 @@ int main(int argc, char *argv[]) {
     }
     args[n] = NULL;
 
-    execv(UTTER_PYTHON, args);
+    /* Spawn a child rather than exec, and wait for it.
+     *
+     * execv replaced this process image with Python's, and LaunchServices
+     * never saw the application it started finish launching. Everything
+     * worked except the one thing that needs the app to be a full citizen:
+     * the status item was created, reported isVisible() == YES, and was never
+     * laid out — frame stayed 32x0 at the origin, so no icon appeared. The
+     * same binary run straight from a terminal was fine, which is what made
+     * this take an hour to see.
+     *
+     * Keeping this process alive as the thing LaunchServices launched, with
+     * Python as its child, gives both halves what they need. The child sets
+     * CFProcessPath so it still belongs to the bundle for permissions. */
+    pid_t child;
+    if (posix_spawn(&child, UTTER_PYTHON, NULL, NULL, args, environ) != 0) {
+        fprintf(stderr, "Utter: could not start %s: %s\n", UTTER_PYTHON, strerror(errno));
+        return 1;
+    }
 
-    /* Only reached if execv failed. A GUI app that dies silently is the worst
-     * possible outcome, so say why somewhere the user can find it. */
-    fprintf(stderr, "Utter: could not start %s: %s\n", UTTER_PYTHON, strerror(errno));
-    return 1;
+    /* Pass on the signals launchd and the Dock use to stop an app, so quitting
+     * Utter actually quits Python rather than orphaning it. */
+    signal(SIGTERM, forward_signal);
+    signal(SIGINT, forward_signal);
+    child_pid = child;
+
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+        /* a forwarded signal interrupted the wait; keep waiting */
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }

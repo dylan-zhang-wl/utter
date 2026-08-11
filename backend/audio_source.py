@@ -93,7 +93,7 @@ class Device:
     is_default: bool
 
 
-def shared_with_output(device_index: int | None = None) -> str | None:
+def shared_with_output(device_index: int | None = None, refresh: bool = False) -> str | None:
     """Name of the input device if it is also the default output, else None.
 
     A headset used as both is almost always Bluetooth, and on macOS opening its
@@ -106,8 +106,17 @@ def shared_with_output(device_index: int | None = None) -> str | None:
     Bluetooth headset for input. What code can do is not trigger it when nobody
     asked to dictate, and say out loud that it is happening.
     """
+    # `refresh` defaults to False, and that default is load-bearing.
+    #
+    # The menu bar calls this on every rebuild to decide whether to show the
+    # shared-device warning. When it also re-initialised PortAudio, the whole
+    # CoreAudio connection was being torn down and rebuilt on the main thread
+    # several times during startup — and the status item never got laid out.
+    # The icon simply did not appear, while isVisible() cheerfully returned
+    # True. Refreshing belongs where a device is about to be opened.
     try:
-        refresh_devices()
+        if refresh:
+            refresh_devices()
         default_in, default_out = sd.default.device
         index = device_index if device_index is not None else default_in
         if index is None or default_out is None:
@@ -118,7 +127,7 @@ def shared_with_output(device_index: int | None = None) -> str | None:
         return None
 
 
-def list_devices(refresh: bool = True) -> list[Device]:
+def list_devices(refresh: bool = False) -> list[Device]:
     """Input-capable devices only, with the system default marked.
 
     `utter doctor` prints this. On the author's machine the default is a

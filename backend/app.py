@@ -117,6 +117,58 @@ def main(argv: list[str] | None = None) -> int:
             print(reason)
         return 0
 
+    if "--probe" in argv:
+        # The bare minimum status item, run from inside the bundle. Terminal
+        # and bundle behave differently and this is the only way to see which.
+        import threading, time
+
+        import AppKit
+
+        app = AppKit.NSApplication.sharedApplication()
+        app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+        item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
+            AppKit.NSVariableStatusItemLength)
+        def frame():
+            w = item.button().window()
+            return w.frame().size if w else None
+
+        steps = []
+        steps.append(("刚创建", frame()))
+        item.button().setTitle_("ZZ")
+        steps.append(("设了文字标题", frame()))
+        img = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+            "waveform", "Utter")
+        img.setTemplate_(True)
+        item.button().setImage_(img)
+        steps.append(("设了图标", frame()))
+        item.button().setTitle_("")
+        steps.append(("清空文字（menubar.py 就是这样）", frame()))
+        m = AppKit.NSMenu.alloc().init()
+        m.addItem_(AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("测试", None, ""))
+        item.setMenu_(m)
+        steps.append(("挂上菜单", frame()))
+
+        if "--with-hotkey" in argv:
+            # pynput installs a CGEventTap and spins its own CFRunLoop. It has
+            # already killed this process once (two listeners plus a Controller
+            # = SIGABRT), so it is the first thing to suspect.
+            from backend.hotkey import HotkeyListener
+
+            HotkeyListener(on_event=lambda _e: None, combination="<alt_l>").start()
+            steps.append(("启动 pynput 热键监听", frame()))
+
+        def report():
+            for label, size in steps:
+                print(f"  {label:<32} {size}", flush=True)
+            time.sleep(4)
+            print(f"  4 秒后                            {frame()}", flush=True)
+            AppKit.NSApp().terminate_(None)
+
+        threading.Thread(target=report, daemon=True).start()
+        AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(0.2, True, lambda _t: None)
+        app.run()
+        return 0
+
     log.info("Utter.app starting; bundle=%s python=%s", bundle_identity(), sys.executable)
 
     try:

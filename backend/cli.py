@@ -120,7 +120,7 @@ def _dictation_checks(config) -> dict[str, tuple[bool, str]]:
     try:
         from backend import audio_source
 
-        devices = audio_source.list_devices()
+        devices = audio_source.list_devices(refresh=True)
         if config.input_device is not None:
             chosen = next((d for d in devices if d.index == config.input_device), None)
             label = chosen.name if chosen else f"设备 {config.input_device} 不存在"
@@ -132,7 +132,7 @@ def _dictation_checks(config) -> dict[str, tuple[bool, str]]:
                 f"{default.name}（系统默认）" if default else "找不到任何输入设备",
             )
 
-        shared = audio_source.shared_with_output(config.input_device)
+        shared = audio_source.shared_with_output(config.input_device, refresh=True)
         if shared:
             checks["输入输出不共用设备"] = (
                 False,

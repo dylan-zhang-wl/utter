@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 
+from backend.overlay import _on_main
+
 log = logging.getLogger(__name__)
 
 # SF Symbol *names*, not glyph characters. Passing the private-use codepoints
@@ -116,10 +118,48 @@ class MenuBar:
             self._item = bar.statusItemWithLength_(AppKit.NSVariableStatusItemLength)
             self._set_symbol(IDLE_SYMBOL)
             self._rebuild()
+
+            # Where the icon actually landed, from inside the process that owns
+            # it. The author reported "no icon" while the accessibility API
+            # cheerfully reported one, and inferring the truth from outside
+            # cost an hour. isVisible and the window frame are the only two
+            # facts that settle it.
+            # Twice: once now, once after the status bar has laid it out. The
+            # frame is 32x0 at the origin immediately after creation, which
+            # looks alarming and means nothing.
+            # Sampled, not read once. A status item lays out asynchronously —
+            # the frame is 32x0 immediately after creation and only becomes
+            # real a few seconds later — so a single early read says nothing.
+            self._log_placement("刚创建")
+            for delay in (5.0, 20.0, 60.0):
+                AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+                    delay, False,
+                    lambda _t, d=delay: self._log_placement(f"{d:.0f}秒后"),
+                )
             return True
         except Exception:
             log.warning("could not install the menu bar item", exc_info=True)
             return False
+
+    def _log_placement(self, when: str) -> None:
+        """Where the icon actually is, from inside the process that owns it.
+
+        The author reported "no icon" while the accessibility API cheerfully
+        reported one, and inferring the truth from outside cost an hour.
+        isVisible plus the window frame are the two facts that settle it.
+        """
+        try:
+            window = self._item.button().window()
+            frame = window.frame() if window else None
+            log.info(
+                "status item %s: visible=%s screen=%s frame=%s",
+                when,
+                self._item.isVisible(),
+                (window.screen().frame() if window and window.screen() else None),
+                frame,
+            )
+        except Exception:  # pragma: no cover
+            log.warning("could not read the status item placement", exc_info=True)
 
     def set_status(self, text: str | None) -> None:
         """A line at the top of the menu, or None to clear it.
@@ -131,12 +171,31 @@ class MenuBar:
         self._status = text
         self._rebuild()
 
+    # -- every AppKit call below here goes to the main thread --
+    #
+    # menubar.py got away without this for a week because _rebuild was only
+    # ever called from a menu click, which is already on the main thread. The
+    # startup status line changed that: it is set from the background thread
+    # that warms the model, and building an NSMenu off the main thread left the
+    # status item present in the accessibility tree and absent from the screen.
+    # The author saw "no icon" while `utter status` cheerfully reported one.
+    #
+    # overlay.py has done this correctly since it was written; this is the same
+    # helper.
+
     def set_busy(self, busy: bool) -> None:
         self._set_symbol(BUSY_SYMBOL if busy else IDLE_SYMBOL)
 
     def _set_symbol(self, name: str) -> None:
         if self._item is None:
             return
+
+        def run():
+            self._set_symbol_now(name)
+
+        _on_main(run)
+
+    def _set_symbol_now(self, name: str) -> None:
         try:
             import AppKit
 
@@ -195,6 +254,9 @@ class MenuBar:
         )
 
     def _rebuild(self) -> None:
+        _on_main(self._rebuild_now)
+
+    def _rebuild_now(self) -> None:
         try:
             import AppKit
 

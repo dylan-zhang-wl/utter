@@ -160,3 +160,23 @@ def test_a_healthy_setup_shows_no_warnings(monkeypatch):
     daemon = _FakeDaemon(config, polish=lambda text, context=None: text)
 
     assert MenuBar(daemon)._warnings(config) == []
+
+
+def test_every_menu_bar_appkit_call_goes_through_the_main_thread():
+    """The status item existed in the accessibility tree and was invisible on
+    screen, because the startup status line rebuilt the NSMenu from the
+    background thread that warms the model. AppKit is main-thread only, and it
+    does not raise — it just quietly does not draw.
+
+    Asserted structurally rather than by mocking AppKit: the methods that touch
+    it must hand off, and the ones that do the touching must be the `_now`
+    variants nothing else calls directly.
+    """
+    import inspect
+
+    from backend import menubar
+
+    for name in ("_rebuild", "_set_symbol"):
+        source = inspect.getsource(getattr(menubar.MenuBar, name))
+        assert "_on_main" in source, f"{name} touches AppKit without hopping threads"
+        assert "import AppKit" not in source, f"{name} should delegate to {name}_now"
