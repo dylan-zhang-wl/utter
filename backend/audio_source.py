@@ -55,6 +55,36 @@ class AudioSourceError(RuntimeError):
     pass
 
 
+def refresh_devices() -> None:
+    """Make PortAudio look at the hardware again.
+
+    It enumerates devices once, when it initialises, and never again. In a
+    command that runs for two seconds that is invisible. In a daemon that runs
+    for days it is a bug with the worst possible symptom: the author put on
+    their AirPods, pressed the hotkey, and got
+
+        utterance 0 contained no speech, discarded
+
+    twice in a row. The daemon had started while a Bluetooth speaker was the
+    default input, so index 1 meant the speaker; by morning index 1 meant the
+    AirPods and the speaker had moved to 3. The stream opened happily against
+    a stale index and recorded silence — no error anywhere, because asking a
+    device that is not listening is not a failure as far as CoreAudio is
+    concerned.
+
+    Measured at 4ms, which is nothing against the ~240ms CoreAudio spends
+    opening the stream afterwards, so this runs before every recording rather
+    than trying to be clever about when the hardware might have changed.
+    """
+    try:
+        sd._terminate()
+        sd._initialize()
+    except Exception:  # pragma: no cover - defensive
+        # A refresh that fails must not stop a dictation. The stale list is
+        # what we had a moment ago, and it may well still be right.
+        log.warning("could not re-enumerate audio devices", exc_info=True)
+
+
 @dataclass(frozen=True)
 class Device:
     index: int
@@ -77,6 +107,7 @@ def shared_with_output(device_index: int | None = None) -> str | None:
     asked to dictate, and say out loud that it is happening.
     """
     try:
+        refresh_devices()
         default_in, default_out = sd.default.device
         index = device_index if device_index is not None else default_in
         if index is None or default_out is None:
@@ -87,13 +118,16 @@ def shared_with_output(device_index: int | None = None) -> str | None:
         return None
 
 
-def list_devices() -> list[Device]:
+def list_devices(refresh: bool = True) -> list[Device]:
     """Input-capable devices only, with the system default marked.
 
     `utter doctor` prints this. On the author's machine the default is a
     Bluetooth speaker and no built-in microphone is listed at all, which is
     worth seeing rather than guessing at.
     """
+    if refresh:
+        refresh_devices()
+
     try:
         default_index = sd.default.device[0]
     except Exception:  # pragma: no cover - defensive
@@ -145,6 +179,11 @@ class MicSource:
     def start(self) -> "MicSource":
         if self._stream is not None:
             return self
+
+        # Before check_input_settings, not after: the check itself reads the
+        # cached list, so a stale one would pass validation and then open the
+        # wrong device.
+        refresh_devices()
 
         try:
             sd.check_input_settings(

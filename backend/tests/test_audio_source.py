@@ -79,6 +79,12 @@ def fake_sd(monkeypatch):
         default=types.SimpleNamespace(device=(0, 1)),
         check_input_settings=lambda **kwargs: None,
         PortAudioError=RuntimeError,
+        # Present because production calls them. A fake missing something the
+        # real module has is how a test suite passes while the thing it stands
+        # in for is broken — this file already carries that lesson about
+        # FakeInjector.
+        _terminate=lambda: None,
+        _initialize=lambda: None,
     )
     monkeypatch.setattr(audio_source, "sd", module)
     return module
@@ -303,3 +309,43 @@ def test_nothing_is_dropped_within_the_utterance_ceiling():
             FakeStream.instances[0].deliver(mono())
 
         assert source.dropped == 0
+
+
+# --- hardware that changes while the daemon runs -------------------------------
+
+
+def test_the_device_list_is_re_read_before_every_recording(monkeypatch):
+    """PortAudio enumerates once at init and never again. The author put on
+    their AirPods and got two silent dictations in a row: the daemon had
+    started when index 1 meant a Bluetooth speaker, and by then index 1 meant
+    the AirPods. No error — CoreAudio does not consider "you asked the wrong
+    device" a failure."""
+    from backend import audio_source
+
+    calls = []
+    monkeypatch.setattr(audio_source, "refresh_devices", lambda: calls.append(1))
+    monkeypatch.setattr(audio_source.sd, "check_input_settings", lambda **k: None)
+
+    class _Stream:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(audio_source.sd, "InputStream", _Stream)
+
+    audio_source.MicSource().start()
+    assert calls == [1]
+
+
+def test_a_failed_refresh_does_not_stop_a_dictation(monkeypatch):
+    """The stale list is what we had a moment ago and may still be right;
+    refusing to record would be the worse failure."""
+    from backend import audio_source
+
+    def boom():
+        raise RuntimeError("portaudio unhappy")
+
+    monkeypatch.setattr(audio_source.sd, "_terminate", boom, raising=False)
+    audio_source.refresh_devices()  # must not raise
