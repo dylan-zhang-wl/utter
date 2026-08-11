@@ -131,3 +131,44 @@ def test_words_are_never_changed():
 def test_empty_is_safe():
     assert close_sentence("") == ""
     assert close_sentence("   ") == "   "
+
+
+# --- Whisper's stock hallucinations --------------------------------------------
+
+
+import pytest
+
+from backend.punctuation import is_hallucination
+
+
+@pytest.mark.parametrize("text", [
+    "字幕志愿者 李宗盛。",      # found in the author's own archive, injected into a document
+    "谢谢观看",
+    "感谢观看，下次再见",
+    "请不吝点赞订阅转发打赏",
+    "Thanks for watching!",
+    "Please subscribe.",
+])
+def test_a_subtitle_credit_is_not_something_the_author_said(text):
+    """Whisper's Chinese training data is largely video captions, so when there
+    is nothing to transcribe it reaches for the credits. The VAD gate answers
+    "is anyone talking", not "is this output real", and a cough gets through."""
+    assert is_hallucination(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "这一节我要讨论字幕志愿者这个群体在数字人文里的位置",
+    "谢谢观看我的论文答辩，下面进入提问环节",
+    "我要订阅这本期刊",
+    "我刚才说的大语言模型，它就还是根据那个听写的质量变的。",
+])
+def test_a_real_sentence_that_mentions_one_is_kept(text):
+    """The first version asked "does it contain a stock phrase" with a length
+    limit, and would have thrown the first of these away. Discarding something
+    the author actually said is far worse than letting one stray line through
+    (铁律 8), so the test comes with the rule."""
+    assert is_hallucination(text) is False
+
+
+def test_an_empty_transcript_is_not_a_hallucination():
+    assert is_hallucination("   ") is False

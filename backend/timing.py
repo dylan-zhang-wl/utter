@@ -97,6 +97,12 @@ class Stopwatch:
     def note_segments(self, count: int) -> None:
         self.segments_note = f"长句在停顿处切成 {count} 小段分别转录（这样标点才有依据）"
 
+    def note_hallucination(self, text: str) -> None:
+        self.repetition_note = (
+            f"⚠ 模型在静音里编了一句「{text.strip()[:20]}」，已丢弃。"
+            "这是 Whisper 的老毛病（字幕训练数据里的片尾字），你没说过这句"
+        )
+
     def note_repetition(self, removed: int) -> None:
         self.repetition_note = (
             f"⚠ 模型复读了，已折叠 {removed} 处重复。"

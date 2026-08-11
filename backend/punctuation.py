@@ -148,3 +148,65 @@ def close_sentence(text: str) -> str:
     if not stripped or stripped[-1] in _TERMINAL:
         return text
     return stripped + ("。" if _is_cjk(stripped[-1]) else ".")
+
+
+# Whisper's stock hallucinations, in the languages this author dictates.
+#
+# Found in their own archive: a near-silent recording came back as
+# 「字幕志愿者 李宗盛。」 and was injected into a document. Nobody said it. It is
+# a subtitle credit, learned from the video captions that make up much of
+# Whisper's Chinese training data, and the model reaches for it whenever there
+# is nothing to transcribe.
+#
+# The VAD gate is the first defence and it does most of the work, but it
+# answers "is anyone talking", not "is this output real". A cough or a keyboard
+# clack passes the gate and gives the model an opening.
+#
+# This list only ever removes text that is the WHOLE utterance. A sentence that
+# happens to contain 「谢谢观看」 in the middle of real speech is real speech.
+_HALLUCINATIONS = (
+    "字幕志愿者", "字幕由", "字幕组", "中文字幕",
+    "谢谢观看", "感谢观看", "感谢收看", "请不吝点赞", "订阅", "转发", "打赏",
+    "明镜与点点栏目", "下次再见", "我们下期再见",
+    "thanks for watching", "thank you for watching", "please subscribe",
+    "subtitles by", "amara.org", "www.", "http",
+)
+
+#: What may be left over once every stock phrase is removed. 「字幕志愿者 李宗盛」
+#: leaves 「李宗盛」; a real sentence leaves most of itself.
+_HALLUCINATION_REMAINDER = 4
+
+
+def is_hallucination(text: str) -> bool:
+    """Is this the model filling a silence with a subtitle credit?
+
+    Not "does it contain a stock phrase" — the first version asked that, with a
+    length limit, and it would have thrown away
+
+        这一节我要讨论字幕志愿者这个群体在数字人文里的位置
+
+    which is exactly the kind of sentence this author dictates. Discarding
+    something they actually said is far worse than letting one stray line
+    through (铁律 8).
+
+    So: strip the stock phrases out and see what is left. A hallucination is
+    almost nothing but stock phrases; a real sentence that mentions one is
+    still a sentence afterwards.
+    """
+    import re as _re
+
+    stripped = _re.sub(r"[\s，。？！、；：,.?!;:\-—…]+", "", text).lower()
+    if not stripped:
+        return False
+
+    remainder = stripped
+    matched = False
+    for phrase in _HALLUCINATIONS:
+        # The phrases are written readably, with spaces; the text has had its
+        # spaces removed. Normalise both or "thanks for watching" never matches
+        # "thanksforwatching" — which it did not, in the first version.
+        needle = _re.sub(r"\s+", "", phrase)
+        if needle and needle in remainder:
+            matched = True
+            remainder = remainder.replace(needle, "")
+    return matched and len(remainder) <= _HALLUCINATION_REMAINDER

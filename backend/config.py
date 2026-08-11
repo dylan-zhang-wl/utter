@@ -18,6 +18,7 @@ Two rules are enforced structurally rather than by convention:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -25,6 +26,8 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+log = logging.getLogger(__name__)
 
 DEFAULT_DIR = Path.home() / "Utter"
 LEGACY_DIR = Path.home() / "LiveScribe"  # v1's directory, pre-rename
@@ -225,16 +228,52 @@ def load(base_dir: Path | None = None, legacy_dir: Path | None = None) -> AppCon
 
 
 def _load_field_by_field(data: dict) -> AppConfig:
-    usable = {}
+    """Keep what validates, drop what does not — and say what was dropped.
+
+    Dropping silently is how the author's 30-term vocabulary disappeared: a
+    degraded load returns defaults, something saves, and the defaults are now
+    the file. Losing a setting is survivable; losing it without a word is the
+    thing this project does not do.
+    """
+    usable, dropped = {}, []
     for key, value in data.items():
         if key not in AppConfig.model_fields:
+            dropped.append(f"{key}（不认识这个设置）")
             continue
         try:
             AppConfig(**{key: value})
         except ValueError:
+            dropped.append(key)
             continue
         usable[key] = value
+    if dropped:
+        log.warning("config: 丢掉了看不懂的字段 %s —— 这些设置会回到默认值", "、".join(dropped))
     return AppConfig(**usable)
+
+
+def load_or_none(base_dir: Path | None = None) -> AppConfig | None:
+    """Like `load`, but None when the file exists and could not be read.
+
+    `load` never fails, by design: a user who cannot launch the app cannot use
+    it to repair the setting that broke it. But "never fails" means it hands
+    back defaults, and a caller that then *writes* turns a temporary read
+    problem into permanent data loss. Anything about to save should ask this
+    one instead.
+    """
+    path = config_path(base_dir)
+    if not path.exists():
+        return AppConfig()
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        log.warning("config: 读不了 %s —— 这次不覆盖它", path)
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        return AppConfig(**data)
+    except ValueError:
+        return _load_field_by_field(data)
 
 
 def save(config: AppConfig, base_dir: Path | None = None) -> Path:

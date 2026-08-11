@@ -166,3 +166,47 @@ def test_every_tier_is_accepted(tier):
 def test_nonsense_tier_is_rejected():
     with pytest.raises(ValueError):
         cfg.AppConfig(model_tier="enormous")
+
+
+# --- a bad read must not become a bad write -------------------------------------
+
+
+def test_an_unreadable_config_is_not_silently_replaced(tmp_path):
+    """`load` never fails, by design — a user who cannot launch the app cannot
+    use it to repair the setting that broke it. But that means it returns
+    defaults, and a caller that then saves turns a read problem into permanent
+    data loss. That is how 30 vocabulary terms disappeared."""
+    path = tmp_path / "config.json"
+    path.write_text("{ this is not json")
+
+    assert cfg.load(base_dir=tmp_path).vocabulary == [], "load still yields something usable"
+    assert cfg.load_or_none(base_dir=tmp_path) is None, "but a writer is told not to"
+
+
+def test_a_missing_config_is_fine_to_write_over(tmp_path):
+    assert cfg.load_or_none(base_dir=tmp_path) is not None
+
+
+def test_a_readable_config_round_trips(tmp_path):
+    cfg.save(cfg.AppConfig(vocabulary=["foreignisation"]), base_dir=tmp_path)
+    loaded = cfg.load_or_none(base_dir=tmp_path)
+    assert loaded is not None and loaded.vocabulary == ["foreignisation"]
+
+
+def test_dropped_fields_are_reported(tmp_path, caplog):
+    """Losing a setting is survivable. Losing it without a word is not."""
+    import json
+    import logging
+
+    (tmp_path / "config.json").write_text(json.dumps({
+        "vocabulary": ["Venuti"],
+        "polish_level": "nuclear",       # not a valid level
+    }))
+
+    with caplog.at_level(logging.WARNING):
+        loaded = cfg.load(base_dir=tmp_path)
+
+    assert loaded.vocabulary == ["Venuti"], "the good fields survive"
+    assert loaded.polish_level == "light", "the bad one falls back to the safe value"
+    assert any("polish_level" in r.getMessage() for r in caplog.records), \
+        "the drop has to be reported, not just survived"

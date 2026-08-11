@@ -41,7 +41,7 @@ from backend.config import AppConfig
 from backend.hotkey import HotkeyError, HotkeyEvent, HotkeyListener
 from backend.injection import Injector
 from backend.pipeline import Utterance
-from backend.punctuation import close_sentence, collapse_repetition
+from backend.punctuation import close_sentence, collapse_repetition, is_hallucination
 from backend.punctuation import normalise as normalise_punctuation
 from backend.scratchpad import Scratchpad, SessionArchive
 from backend.timing import Stopwatch
@@ -365,9 +365,16 @@ class DictationDaemon:
         it. Reload, apply only what the menu owns, write.
         """
         try:
-            from backend.config import load, save
+            from backend.config import load_or_none, save
 
-            on_disk = load()
+            on_disk = load_or_none()
+            if on_disk is None:
+                # The file is there and unreadable. Writing now would replace
+                # it with defaults and take the vocabulary with it, which is
+                # exactly how 30 terms were lost. A menu toggle is worth less
+                # than the file.
+                log.warning("配置文件读不了，这次不保存菜单的改动")
+                return
             for field in self.MENU_OWNED:
                 setattr(on_disk, field, getattr(self.config, field))
             # Keep memory and disk in step, so anything edited externally while
@@ -800,6 +807,19 @@ class DictationDaemon:
             # degenerated rather than believe they said this.
             log.warning("collapsed %d repetitions in utterance %d", repeats, job.index)
             watch.note_repetition(repeats)
+        if is_hallucination(raw):
+            # Whisper filling a silence with a subtitle credit. Found in the
+            # author's archive: 「字幕志愿者 李宗盛。」 injected into a document
+            # after a near-silent recording. Loud, never quiet — they need to
+            # know the model invented something rather than wonder where their
+            # sentence went.
+            log.warning("discarded a Whisper hallucination: %r", raw)
+            watch.note_hallucination(raw)
+            if self.overlay is not None:
+                self.overlay.set_state("error", "没听清")
+                time.sleep(0.9)
+            return
+
         if not raw:
             return
 
