@@ -495,6 +495,53 @@ KEY_NAMES = {
 }
 
 
+def cmd_status(args, out) -> int:
+    """Is Utter running, and is it healthy?
+
+    Added because the author double-clicked a running, healthy Utter and
+    concluded it had not opened — which was the right conclusion from the
+    evidence available, since a menu-bar app with no Dock icon and no window
+    shows nothing at all, and macOS hides the icon outright when the menu bar
+    is crowded. "Nothing appeared" and "it is broken" need to be
+    distinguishable without reading a log file.
+    """
+    import subprocess
+
+    from backend.config import DEFAULT_DIR, load
+    from backend.instance_lock import InstanceLock
+
+    owner = InstanceLock(DEFAULT_DIR / "dictate.pid").existing_owner()
+    if owner is None:
+        print("Utter 没在跑。\n  开它：open /Applications/Utter.app", file=out)
+        return 1
+
+    config = load()
+    print(f"✅ Utter 在跑（进程号 {owner.pid}）", file=out)
+    print(f"  按住 {config.hotkey_push} 说一句", file=out)
+    print(f"  双击 {config.hotkey_toggle} "
+          f"{'边说边出字' if config.stream_while_speaking else '长段口述'}", file=out)
+    print(f"  润色 {'开（' + config.polish_level + '）' if config.polish_enabled else '关'}"
+          f"   语言 {config.dictate_language or '自动'}", file=out)
+
+    try:
+        count = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to tell process "Utter" '
+             'to get count of menu bar items of menu bar 1'],
+            capture_output=True, text=True, timeout=15,
+        ).stdout.strip()
+        if count == "1":
+            print("  菜单栏图标：已创建（波形）。看不到的话多半是菜单栏挤满了，"
+                  "macOS 会直接把它藏掉——先关掉几个别的图标试试。", file=out)
+        else:
+            print(f"  ⚠ 菜单栏图标：没找到（AX 报告 {count!r}）", file=out)
+    except Exception:
+        pass
+
+    print(f"\n  日志 ~/Utter/utter.log", file=out)
+    return 0
+
+
 def cmd_key(args, out) -> int:
     """Store an API key in the Keychain, without it ever touching a file.
 
@@ -892,6 +939,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="delete archives older than DAYS days (no default — you name the number)",
     )
 
+    sub.add_parser("status", help="is Utter running, and is it healthy")
+
     key = sub.add_parser("key", help="store an API key in the Keychain (铁律 4)")
     key.add_argument("name", nargs="?", help="e.g. google_api_key; omit to list")
     key.add_argument("--forget", action="store_true", help="delete it instead")
@@ -946,6 +995,8 @@ def main(argv=None, stdout=None, **overrides) -> int:
         return cmd_mics(args, out)
     if args.command == "sessions":
         return cmd_sessions(args, out)
+    if args.command == "status":
+        return cmd_status(args, out)
     if args.command == "key":
         return cmd_key(args, out)
     if args.command == "polish":

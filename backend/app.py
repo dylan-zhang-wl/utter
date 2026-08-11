@@ -31,6 +31,11 @@ from pathlib import Path
 
 LOG_PATH = Path.home() / "Utter" / "utter.log"
 
+#: Module level, because _notify and alert are called from paths that have no
+#: local `log` — the first version referenced one and would have raised
+#: NameError inside the very handler meant to keep startup from failing silently.
+log = logging.getLogger("utter.app")
+
 
 def _set_up_logging() -> None:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -65,6 +70,20 @@ def alert(title: str, message: str, *, settings_url: str | None = None) -> None:
         print(f"{title}\n{message}", file=sys.stderr)
 
 
+def _notify(title: str, body: str) -> None:
+    """A Notification Centre banner. Non-blocking, unlike alert()."""
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             f'display notification {body!r} with title {title!r}'],
+            check=False, capture_output=True, timeout=10,
+        )
+    except Exception:  # pragma: no cover
+        log.debug("could not post a notification", exc_info=True)
+
+
 def bundle_identity() -> str | None:
     """What macOS thinks this process is.
 
@@ -84,7 +103,6 @@ def bundle_identity() -> str | None:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     _set_up_logging()
-    log = logging.getLogger("utter.app")
 
     if "--check" in argv:
         # Diagnostics that only make sense from inside the bundle.
@@ -204,6 +222,19 @@ def _run(log) -> int:
         return 1
 
     log.info("ready; hotkey=%s", config.hotkey_push)
+
+    # Say so out loud, once.
+    #
+    # A menu-bar app with no Dock icon and no window gives the user nothing to
+    # look at, and if the menu bar is crowded macOS silently hides the icon
+    # rather than shrinking anything. The author double-clicked a running,
+    # healthy Utter and reported "I can't open it any more", which is the
+    # correct conclusion from the evidence they had: nothing appeared.
+    _notify(
+        "Utter 就绪",
+        f"按住 {config.hotkey_push} 说一句；双击 {config.hotkey_toggle} 边说边出字。"
+        "图标在菜单栏（波形）。",
+    )
     try:
         from backend.cli import _run_with_ui
 
