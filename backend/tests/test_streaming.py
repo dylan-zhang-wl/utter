@@ -68,8 +68,12 @@ def build(clauses, config=None, **kwargs):
             return []
 
     daemon_mod.VadSegmenter = ScriptedSegmenter  # replaced per-test, restored by fixture
+    # Streaming is off by default (the user asked for that after living with
+    # it), so a file of streaming tests has to switch it on rather than inherit
+    # it. A test whose subject depends on a default is a test that breaks when
+    # somebody changes their mind about the default — which is what happened.
     return daemon_mod.DictationDaemon(
-        config=config or AppConfig(),
+        config=config or AppConfig(stream_while_speaking=True),
         stt=kwargs.pop("stt", None) or FakeStt(texts=["一", "二", "三"]),
         make_mic=lambda mic=kwargs.pop("mic", None): mic or StreamingMic(),
         injector=kwargs.pop("injector", None) or FakeInjector(),
@@ -228,7 +232,7 @@ def test_a_streamed_clause_is_closed_by_the_pause_that_followed_it():
     added, which 铁律 10 has always allowed."""
     injector = FakeInjector()
     d = build([clause()], stt=FakeStt(texts=["而且"]),
-              injector=injector, config=AppConfig(close_sentences=True))
+              injector=injector, config=AppConfig(stream_while_speaking=True, close_sentences=True))
     d.start()
     d.begin_utterance(stream=True)
     deadline = time.time() + 5
@@ -245,7 +249,7 @@ def test_a_streamed_clause_is_closed_by_the_pause_that_followed_it():
 def test_a_held_utterance_still_gets_one():
     d_injector = FakeInjector()
     d = build([clause()], stt=FakeStt(texts=["这是一句话"]),
-              injector=d_injector, config=AppConfig(close_sentences=True))
+              injector=d_injector, config=AppConfig(stream_while_speaking=True, close_sentences=True))
     d.start()
     d.begin_utterance(stream=False)
     d.end_utterance(); d.wait_idle(); d.stop()
@@ -266,7 +270,7 @@ def test_streaming_does_not_pay_for_an_llm_round_trip_per_clause():
     injector = FakeInjector()
     d = build([clause()], stt=FakeStt(texts=["而且"]), injector=injector,
               polish=slow_polish,
-              config=AppConfig(polish_enabled=True, polish_level="medium"))
+              config=AppConfig(stream_while_speaking=True, polish_enabled=True, polish_level="medium"))
     d.start()
     d.begin_utterance(stream=True)
     deadline = time.time() + 5
@@ -281,7 +285,7 @@ def test_push_to_talk_still_polishes():
     calls = []
     d = build([clause()], stt=FakeStt(texts=["这是一句话"]),
               polish=lambda text, context=None: calls.append(text) or text,
-              config=AppConfig(polish_enabled=True))
+              config=AppConfig(stream_while_speaking=True, polish_enabled=True))
     d.start()
     d.begin_utterance(stream=False)
     d.end_utterance(); d.wait_idle(); d.stop()

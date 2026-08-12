@@ -119,7 +119,14 @@ class AppConfig(BaseModel):
     # caption being corrected — each clause is transcribed once its pause has
     # arrived and lands final. Push-to-talk is unaffected: the finger is
     # already the segmenter there.
-    stream_while_speaking: bool = True
+    #
+    # Off by default, at the user's request after living with it. Streaming
+    # trades punctuation quality for immediacy: a clause is closed by the
+    # silence around it rather than by Whisper reading the whole sentence, so
+    # the text arrives sooner and reads slightly rougher. That is the right
+    # trade for some work and the wrong one for dictating an argument, and the
+    # safer default is the one that does not surprise anybody. One switch away.
+    stream_while_speaking: bool = False
 
     # Where to cut, measured on the author's own dictation 2026-08-11. The
     # numbers matter more than they look:
