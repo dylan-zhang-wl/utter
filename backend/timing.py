@@ -130,6 +130,31 @@ class Stopwatch:
     def over_target(self) -> bool:
         return self.target_ms is not None and self.total_ms > self.target_ms
 
+    def oneline(self) -> str:
+        """The same numbers on one line, for the log rather than the terminal.
+
+        `report()` is the aligned block the CLI prints after each utterance.
+        This exists because the daemon used to log timings only when a run went
+        over budget: after a day of real use, 3 utterances out of 105 had any
+        timing recorded and the other 102 were gone. When one of the three
+        turned out to be genuinely slow there was nothing to compare it
+        against, and no way to tell a slow transcription from a slow polish.
+
+        One line per utterance costs nothing and makes a day of use greppable.
+        """
+        if not self.stages:
+            return "no stages recorded"
+        parts = " ".join(
+            f"{s.name}={'skip' if s.skipped else f'{s.ms:.0f}'}" for s in self.stages
+        )
+        out = f"{self.total_ms:.0f}ms [{parts}]"
+        if self.audio_seconds:
+            out += f" 音频{self.audio_seconds:.1f}s"
+            out += f" 每秒{self.total_ms / self.audio_seconds:.0f}ms"
+        if self.target_ms is not None:
+            out += f" 预算{self.target_ms:.0f}ms"
+        return out
+
     def report(self) -> str:
         if not self.stages:
             return "no stages recorded"

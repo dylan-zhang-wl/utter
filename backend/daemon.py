@@ -953,6 +953,10 @@ class DictationDaemon:
             except Exception:  # pragma: no cover
                 log.warning("on_text callback failed", exc_info=True)
 
+        # Every utterance, not only the slow ones. A day of use left 3 timed
+        # runs out of 105, which was exactly enough to know something was slow
+        # and not enough to know what.
+        log.info("dictation %d: %s", job.index, watch.oneline())
         if watch.over_target:
             log.warning("dictation %d took %.0f ms", job.index, watch.total_ms)
 

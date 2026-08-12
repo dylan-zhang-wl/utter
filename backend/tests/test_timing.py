@@ -233,3 +233,24 @@ def test_report_says_when_injection_failed_and_why():
     report = watch.report()
     assert "未注入" in report
     assert "focus is on Terminal" in report
+
+
+def test_oneline_carries_every_stage_and_the_budget():
+    """A day of real use recorded timings for 3 utterances out of 105, because
+    the daemon logged them only when over budget. When one turned out to be
+    genuinely slow there was nothing to compare it with."""
+    watch = timing.Stopwatch(target_ms=5000, audio_seconds=10.0)
+    with watch.span("transcription"):
+        pass
+    watch.skip("polish", "off")
+
+    line = watch.oneline()
+    assert "transcription=" in line
+    assert "polish=skip" in line
+    assert "预算5000ms" in line
+    assert "音频10.0s" in line
+    assert "\n" not in line, "it is a log line, not a report"
+
+
+def test_oneline_survives_an_utterance_with_no_stages():
+    assert timing.Stopwatch().oneline() == "no stages recorded"
