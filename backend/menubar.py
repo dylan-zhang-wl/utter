@@ -260,25 +260,10 @@ class MenuBar:
             log.warning("could not set the menu bar symbol", exc_info=True)
 
     def _warnings(self, config):
-        """Anything wrong, said in the menu rather than in a log file.
+        """Shared with the settings window, so the two cannot disagree."""
+        from backend.health import warnings_for
 
-        The microphone being shared with the speakers is the one that has
-        actually bitten: it degrades every transcription and looks like a bad
-        model. It was reported by `utter doctor` and nowhere the author would
-        see it during normal use.
-        """
-        lines = []
-        try:
-            from backend.audio_source import shared_with_output
-
-            shared = shared_with_output(config.input_device)
-            if shared:
-                lines.append(f"⚠ {shared} 同时是麦克风和扬声器")
-        except Exception:  # pragma: no cover
-            pass
-        if config.polish_enabled and self.daemon.polish is None:
-            lines.append("⚠ 润色用不了")
-        return lines
+        return warnings_for(self.daemon, config)
 
     def _providers(self):
         """Every engine this build knows about, available ones first."""
@@ -328,8 +313,8 @@ class MenuBar:
             if self._status:
                 add(self._status, None, False)
                 menu.addItem_(AppKit.NSMenuItem.separatorItem())
-            for warning in self._warnings(self.daemon.config):
-                add(warning, "openWindow:")
+            for note in self._warnings(self.daemon.config):
+                add(note.short, "openWindow:")
             add("设置…", "openWindow:")
             menu.addItem_(AppKit.NSMenuItem.separatorItem())
             add("退出 Utter", "quit:")

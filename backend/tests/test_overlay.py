@@ -136,7 +136,7 @@ def test_a_shared_microphone_is_warned_about_in_the_menu(monkeypatch):
     monkeypatch.setattr("backend.audio_source.shared_with_output", lambda _d: "AirPods Pro")
     warnings = MenuBar(_FakeDaemon(AppConfig()))._warnings(AppConfig())
 
-    assert any("AirPods Pro" in w for w in warnings)
+    assert any("AirPods Pro" in note.short for note in warnings)
 
 
 def test_polish_that_is_on_but_broken_is_warned_about(monkeypatch):
@@ -147,7 +147,7 @@ def test_polish_that_is_on_but_broken_is_warned_about(monkeypatch):
     config = AppConfig(polish_enabled=True)
     warnings = MenuBar(_FakeDaemon(config, polish=None))._warnings(config)
 
-    assert any("润色" in w for w in warnings)
+    assert any("润色" in note.short for note in warnings)
 
 
 def test_a_healthy_setup_shows_no_warnings(monkeypatch):

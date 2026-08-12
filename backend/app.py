@@ -294,6 +294,28 @@ def _run(log) -> int:
     window = MainWindow(daemon, on_quit=daemon.stop)
     menu = MenuBar(daemon, on_quit=daemon.stop, window=window)
     menu.install()
+
+    # An LSUIElement app draws no menu bar, so it is easy to think it needs no
+    # NSMenu. Key equivalents are dispatched through the main menu, so without
+    # one ⌘W and ⌘Q do nothing — and neither does ⌘V, which is the only way
+    # anyone puts an API key into the settings window.
+    from backend.appmenu import install as install_app_menu
+
+    install_app_menu(open_settings_target=window.menu_target())
+
+    # Clicking the Dock tile must bring the settings window back. Without a
+    # delegate saying so, macOS has nothing to reopen — the app has no
+    # documents and no main window — and the click does nothing at all.
+    class UtterAppDelegate(AppKit.NSObject):
+        def applicationShouldHandleReopen_hasVisibleWindows_(self, _app, visible):
+            if not visible:
+                window.show()
+            return True
+
+    app_delegate = UtterAppDelegate.alloc().init()
+    app.setDelegate_(app_delegate)
+    globals()["_app_delegate"] = app_delegate   # outlives _run; nothing else holds it
+
     menu.set_status("启动中…")
 
     def bring_up():
