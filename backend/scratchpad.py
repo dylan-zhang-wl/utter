@@ -22,7 +22,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from backend.config import DEFAULT_DIR
+# The module, not the name. `from ... import DEFAULT_DIR` binds the value
+# at import time, so patching backend.config.DEFAULT_DIR later never
+# reaches this file — which is why the sandbox guard covered the config
+# and missed the archive sitting right beside it.
+from backend import config as _config
 from backend.pipeline import Utterance
 
 log = logging.getLogger(__name__)
@@ -63,7 +67,7 @@ class SessionArchive:
     """
 
     def __init__(self, base_dir: Path | None = None, session_id: str | None = None):
-        self.base_dir = Path(base_dir) if base_dir else DEFAULT_DIR
+        self.base_dir = Path(base_dir) if base_dir else _config.DEFAULT_DIR
         self.session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
 
     @property

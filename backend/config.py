@@ -174,7 +174,12 @@ class AppConfig(BaseModel):
     audio_source: str = "microphone"  # "microphone" | "system"
     translation_engine: str = "google"  # "google" | "openai"
     display_mode: str = "bilingual"  # "english" | "bilingual" | "chinese"
-    save_dir: str = str(DEFAULT_DIR / "sessions")
+    # default_factory, not a plain default: a plain default is evaluated
+    # when this module is imported, which bakes the real home directory
+    # into the class and makes the path unpatchable afterwards. That is
+    # how the test suite came to write 1,299 session files into the
+    # author's live archive.
+    save_dir: str = Field(default_factory=lambda: str(DEFAULT_DIR / "sessions"))
     server_host: str = "127.0.0.1"
     server_port: int = 8765
 
