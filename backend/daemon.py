@@ -565,6 +565,33 @@ class DictationDaemon:
                     else None
                 ),
             )
+        else:
+            # Zero chunks: the key went down and up and the microphone never
+            # delivered a single frame. Found in a day of real use — three
+            # presses out of 115 produced no text, no warning and no log line
+            # at all, because this branch used to have no `else`. A press that
+            # leaves no trace is the exact failure this project refuses to
+            # ship; the empty-audio case downstream already reports device,
+            # duration and peak, and this one said nothing.
+            #
+            # Opening the microphone was measured at up to 713ms cold, so a
+            # short tap can genuinely end before the first frame arrives.
+            held_ms = ((released - self._pressed_at) * 1000
+                       if self._pressed_at is not None else None)
+            log.warning(
+                "按键没有产生任何音频，这一次什么都没有转录"
+                "（设备=%s 按住=%s 麦克风开启=%s）%s",
+                self._last_device or "?",
+                f"{held_ms:.0f}ms" if held_ms is not None else "?",
+                f"{(mic.first_chunk_at - self._pressed_at) * 1000:.0f}ms"
+                if getattr(mic, "first_chunk_at", None) and self._pressed_at is not None
+                else "从未开启",
+                "  ← 按得太短，麦克风还没来得及开" if held_ms is not None and held_ms < 800
+                else "",
+            )
+            if self.overlay is not None:
+                self.overlay.set_state("error", "没收到声音")
+                time.sleep(0.9)
 
         if self.overlay is not None:
             self._level_stop.set()

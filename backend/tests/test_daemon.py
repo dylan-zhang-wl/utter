@@ -1151,3 +1151,55 @@ def test_a_short_hold_still_has_a_tight_budget():
     d.stop()
 
     assert d.last_timing.target_ms == pytest.approx(1800, abs=1)
+
+
+# --- a press that produced nothing at all ---------------------------------------
+
+
+def test_a_press_that_captured_no_audio_says_so(caplog):
+    """Found in a day of real use: three presses out of 115 produced no text,
+    no warning and no log line, because the enqueue branch had no `else`.
+
+    A press that leaves no trace anywhere is the failure this whole project is
+    organised against. The empty-audio path downstream already reports device,
+    duration and peak; this one said nothing at all, so the author could not
+    have known which three sentences never happened.
+    """
+    import logging
+
+    class SilentMic(FakeMic):
+        first_chunk_at = None
+
+        def chunks(self):
+            return iter(())          # the microphone never delivered a frame
+
+    mic = SilentMic()
+    d = build(mic=mic)
+    with caplog.at_level(logging.WARNING, logger="backend.daemon"):
+        d.begin_utterance()
+        d.end_utterance()
+
+    assert caplog.records, "a press that captured nothing must not pass in silence"
+    said = caplog.records[-1].getMessage()
+    assert "没有产生任何音频" in said
+    assert d._queue.empty(), "nothing should have been queued"
+
+
+def test_a_short_tap_is_told_it_was_too_short(caplog):
+    """Opening the microphone was measured at up to 713ms cold, so a quick tap
+    can genuinely end before the first frame — worth saying, because the user's
+    next move otherwise is to doubt the model."""
+    import logging
+
+    class SilentMic(FakeMic):
+        first_chunk_at = None
+
+        def chunks(self):
+            return iter(())
+
+    d = build(mic=SilentMic())
+    with caplog.at_level(logging.WARNING, logger="backend.daemon"):
+        d.begin_utterance()
+        d.end_utterance()
+
+    assert "按得太短" in caplog.records[-1].getMessage()
