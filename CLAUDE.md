@@ -87,7 +87,9 @@ uv pip install --python ~/.venvs/utter/bin/python --no-deps -e .
 
 ## 运行
 
-**日常用：双击 `/Applications/Utter.app`。** 菜单栏常驻，不占 Dock，不需要终端。
+**日常用：双击 `/Applications/Utter.app`。** 菜单栏常驻，不需要终端。
+**Dock 图标只在设置窗口开着时出现**（`NSApplicationActivationPolicy` 在
+Regular 与 Accessory 之间切）——关掉窗口就退回菜单栏，不占 Dock 位置。
 日志在 `~/Utter/utter.log`。
 
 ```bash
@@ -131,11 +133,11 @@ v3 设计 §7 说那部分设计有效，是 P3 的起点。
 
 ## 状态
 
-当前在 `v3` 分支。643 个测试通过，无豁免、无 xfail。
+当前在 `v3` 分支。681 个测试通过，无豁免、无 xfail。
 
 - **P1 共享核心已验收**（2026-08-10）：provider 抽象、硬件探测、档位 catalog、模型下载器、
   VAD、配置与钥匙串、五槽管线、CLI。每句转录中位 1.18s、占空比 29%。
-- **P2b 边说边出字已完成**（2026-08-11）：开关模式下 VAD 按 400ms 停顿切句，
+- **P2b 边说边出字已完成**（2026-08-11，2026-08-12 起默认关闭）：开关模式下 VAD 按 400ms 停顿切句，
   逐句转录逐句注入，实测 47 秒音频出 12 段、末句滞后 0.9 秒。受铁律 9 约束：
   一句只注入一次、永不回改，所以没有"先出草稿再改"。
 - **P4 打包已完成**（2026-08-11）：`/Applications/Utter.app`，菜单栏常驻、可开机自启。

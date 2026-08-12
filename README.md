@@ -41,7 +41,7 @@ That property is the point of the project. Everything else is engineering.
 
 - **Push-to-talk**: hold a key, speak, release. The whole utterance is
   transcribed and pasted at the cursor.
-- **Streaming**: double-tap a key and keep talking. Silero VAD cuts the audio at
+- **Streaming** (off by default): double-tap a key and keep talking. Silero VAD cuts the audio at
   your own pauses and each clause is transcribed and injected while you are
   still speaking the next one — roughly one clause every four seconds, the last
   landing about a second after you stop.
@@ -185,7 +185,7 @@ days. It cost them.
 ## Status
 
 Personal software, used daily by its author, published because the lessons are
-worth more shared than kept. 654 tests. Speak mode is complete; Listen mode is
+worth more shared than kept. 681 tests. Speak mode is complete; Listen mode is
 designed and not implemented; the bundle is not distributable to other machines
 yet (Apple notarisation needs a paid developer account).
 
