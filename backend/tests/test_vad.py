@@ -385,3 +385,98 @@ def test_speech_duration_is_zero_for_silence():
 
 def test_speech_duration_is_zero_for_a_buffer_shorter_than_a_frame():
     assert vad.speech_duration(np.zeros(100, dtype=np.float32), speech_prob=loud_is_speech) == 0.0
+
+
+# --- the floor that keeps a sentence together (P3, 2026-08-16) -------------------
+
+
+def _speech(seconds):
+    """Audio the VAD will call speech."""
+    import numpy as np
+
+    from backend.vad import SAMPLE_RATE
+
+    n = int(SAMPLE_RATE * seconds)
+    t = np.arange(n, dtype=np.float32) / SAMPLE_RATE
+    return (np.sin(2 * np.pi * 200 * t) * 0.4).astype(np.float32)
+
+
+def _silence(seconds):
+    import numpy as np
+
+    from backend.vad import SAMPLE_RATE
+
+    return np.zeros(int(SAMPLE_RATE * seconds), dtype=np.float32)
+
+
+def _run(segmenter, audio):
+    import numpy as np
+
+    from backend.vad import SpeechEnd
+
+    out = []
+    for i in range(0, len(audio), 8000):
+        out += [e for e in segmenter.feed(audio[i:i + 8000]) if isinstance(e, SpeechEnd)]
+    out += [e for e in segmenter.flush() if isinstance(e, SpeechEnd)]
+    return out
+
+
+def _talk():
+    """One sentence of three phrases, then a real sentence break, then more.
+
+    The phrase pauses are 600ms — just over the 500ms threshold, which is the
+    whole problem — and the sentence pause is 1.2s. This is the shape that
+    produced 「My father」 and 「from equity states」 as separate entries in a
+    real session.
+    """
+    import numpy as np
+
+    return np.concatenate([
+        _speech(1.5), _silence(0.6), _speech(1.5), _silence(0.6), _speech(1.5),
+        _silence(1.2),
+        _speech(1.5), _silence(0.6), _speech(1.5),
+        _silence(1.2),
+    ])
+
+
+def test_without_a_floor_every_breath_cuts_a_fragment():
+    """The bug, reproduced: 500ms alone treats a phrase break as a sentence
+    end, which is how a transcript came back as 「My father」."""
+    from backend.vad import VadSegmenter
+
+    pieces = _run(VadSegmenter(vad_silence_ms=500, max_utterance_sec=12,
+                               speech_prob=lambda f: 1.0 if abs(f).max() > 0.1 else 0.0),
+                  _talk())
+    assert len(pieces) >= 4, f"应该被切碎，实际 {len(pieces)} 段"
+
+
+def test_a_floor_keeps_the_phrases_of_one_sentence_together():
+    from backend.vad import SAMPLE_RATE, VadSegmenter
+
+    pieces = _run(VadSegmenter(vad_silence_ms=500, max_utterance_sec=12,
+                               min_utterance_sec=4.0,
+                               speech_prob=lambda f: 1.0 if abs(f).max() > 0.1 else 0.0),
+                  _talk())
+
+    assert len(pieces) <= 2, f"三个词组应该合成一句，实际切了 {len(pieces)} 段"
+    assert all(len(p.audio) / SAMPLE_RATE >= 3.0 for p in pieces), \
+        "还有短于 3 秒的碎片"
+
+
+def test_the_ceiling_still_wins_over_the_floor():
+    """A speaker who never pauses must not be held for ever."""
+    from backend.vad import SAMPLE_RATE, VadSegmenter
+
+    pieces = _run(VadSegmenter(vad_silence_ms=500, max_utterance_sec=6,
+                               min_utterance_sec=4.0,
+                               speech_prob=lambda f: 1.0 if abs(f).max() > 0.1 else 0.0),
+                  _speech(20.0))
+
+    assert pieces, "一直说话也必须出字"
+    assert max(len(p.audio) / SAMPLE_RATE for p in pieces) <= 7.0
+
+
+def test_dictation_is_unaffected_because_the_floor_defaults_to_off():
+    from backend.vad import VadSegmenter
+
+    assert VadSegmenter().min_utterance_sec == 0.0

@@ -147,6 +147,15 @@ class AppConfig(BaseModel):
     # 占空比升到三四成——余量仍然够，而且翻译本来就是并行的。
     listen_silence_ms: int = 500
     listen_max_seconds: int = 12
+    # And a floor, added after the first fix overshot. 500ms alone cut on every
+    # breath between phrases: 25 pieces, median 23 characters, half of them not
+    # sentences at all. A pause only ends an utterance once there are a few
+    # seconds of speech behind it, so 「My father / from equity states / in
+    # Southwest ...」 stays one sentence.
+    #
+    # The two numbers together bound the latency: nothing waits longer than
+    # listen_max_seconds, and nothing arrives in fragments shorter than this.
+    listen_min_seconds: float = 4.0
 
     # Where to cut, measured on the author's own dictation 2026-08-11. The
     # numbers matter more than they look:

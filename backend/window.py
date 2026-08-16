@@ -381,11 +381,7 @@ class MainWindow:
             column.setTranslatesAutoresizingMaskIntoConstraints_(False)
             blur.addSubview_(column)
             AppKit.NSLayoutConstraint.activateConstraints_([
-                # Placed by the page, not by a bare width. Replacing the four
-                # edge constraints with a lone width left the column with no
-                # position at all: it sat at x=0 with no margin and ran off the
-                # right of the window.
-                column.widthAnchor().constraintEqualToConstant_(WIDTH - PAD * 2),
+
             ])
 
             def stacked(view):
@@ -437,7 +433,11 @@ class MainWindow:
                 column.topAnchor().constraintEqualToAnchor_(settings_page.topAnchor()),
                 column.leadingAnchor().constraintEqualToAnchor_constant_(
                     settings_page.leadingAnchor(), PAD),
-                column.trailingAnchor().constraintLessThanOrEqualToAnchor_constant_(
+                # Equal, not less-than, and no fixed width: a pinned 460pt
+                # column silently set a 500pt floor on the whole window, which
+                # is why 开始听记 hid the tabs and then failed to shrink into a
+                # bookmark. Tracking the page instead lets the window narrow.
+                column.trailingAnchor().constraintEqualToAnchor_constant_(
                     settings_page.trailingAnchor(), -PAD),
             ])
 

@@ -113,7 +113,8 @@ class ListenController:
             translate=None)          # the queue does it, in batches
         self._segmenter = VadSegmenter(
             vad_silence_ms=self.config.listen_silence_ms,
-            max_utterance_sec=self.config.listen_max_seconds)
+            max_utterance_sec=self.config.listen_max_seconds,
+            min_utterance_sec=self.config.listen_min_seconds)
         self._source = self._open_source(source, pids, device)
         self._source.start()
         self._hold_awake()

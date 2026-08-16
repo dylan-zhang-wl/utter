@@ -153,6 +153,17 @@ class VadSegmenter:
     vad_silence_ms: int = 600
     vad_sensitivity: float = 0.5
     max_utterance_sec: int = 30
+    #: A pause shorter than this cannot end an utterance. 0 disables it, which
+    #: is what dictation uses — there the finger, not the pause, decides.
+    #:
+    #: Listen mode needs it. Measured on a real talk 2026-08-16: at 500ms of
+    #: silence the segmenter produced 25 pieces with a median length of 23
+    #: characters, and only 13 of them ended in sentence punctuation — 「My
+    #: father」, 「from equity states」, 「有没有」. A speaker breathes between
+    #: phrases, so a short pause is a comma, not a full stop. Requiring a few
+    #: seconds of speech before a pause may close the segment keeps the phrase
+    #: breaks inside the sentence where they belong.
+    min_utterance_sec: float = 0.0
     pre_roll_ms: int = 200
     speech_prob: Callable[[np.ndarray], float] | None = None
 
@@ -178,6 +189,10 @@ class VadSegmenter:
     @property
     def _max_samples(self) -> int:
         return self.max_utterance_sec * SAMPLE_RATE
+
+    @property
+    def _min_samples(self) -> int:
+        return int(self.min_utterance_sec * SAMPLE_RATE)
 
     @property
     def _pre_roll(self) -> int:
@@ -255,7 +270,8 @@ class VadSegmenter:
             self._last_voiced = self._cursor
         else:
             self._silence_frames += 1
-            if self._silence_frames >= self._silence_limit:
+            long_enough = (self._last_voiced - self._speech_start) >= self._min_samples
+            if self._silence_frames >= self._silence_limit and long_enough:
                 # Cut at the last voiced frame, not here — the trailing silence
                 # is the detector's evidence, not part of what was said.
                 events.append(self._close(self._last_voiced, forced=False))
