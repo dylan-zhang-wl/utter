@@ -752,7 +752,8 @@ def cmd_listen(args, out, *, stt=None, translate=None, mic=None, complete=None) 
             log.info("丢掉一条静音幻觉：%r", u.raw_text[:40])
             return
         entry = Entry(index=u.index, started_at=u.start_sec, source=u.raw_text,
-                      display=strip_fillers(u.raw_text), forced=u.forced)
+                      display=strip_fillers(u.raw_text), forced=u.forced,
+                      confidence=u.confidence)
         session.add(entry)
         print(f"[{_mmss(u.start_sec)}] {entry.display}", file=out, flush=True)
         if translate is not None:

@@ -30,6 +30,42 @@ log = logging.getLogger(__name__)
 AUTO = "auto"
 
 
+@dataclass(frozen=True)
+class Detailed:
+    """A transcription plus what the model thought of it.
+
+    `confidence` is Whisper's own `avg_logprob`, duration-weighted across the
+    segments of one utterance. Higher is surer; real speech sits well above a
+    hallucination. Recorded from the first meeting and displayed nowhere until
+    the distribution on real audio is known — the only figure available today
+    is -0.82 for two seconds of quiet noise that transcribed as " You".
+
+    `no_speech` is the model's own no-speech probability. Kept for the record
+    and *not* used as a hallucination signal: on that same invented " You" it
+    read 8e-11, meaning the model was certain it had heard speech.
+    """
+
+    text: str
+    confidence: float | None = None
+    no_speech: float | None = None
+
+
+def transcribe_detailed(provider, audio, language=None, initial_prompt=None) -> Detailed:
+    """Ask for detail; fall back to plain text for providers without it.
+
+    Optional rather than required, so no existing provider has to change and
+    dictation is untouched.
+    """
+    detailed = getattr(provider, "transcribe_detailed", None)
+    if detailed is not None:
+        try:
+            return detailed(audio, language=language, initial_prompt=initial_prompt)
+        except Exception:
+            log.warning("detailed transcription failed, falling back", exc_info=True)
+    return Detailed(text=provider.transcribe(
+        audio, language=language, initial_prompt=initial_prompt))
+
+
 @runtime_checkable
 class SttProvider(Protocol):
     id: str

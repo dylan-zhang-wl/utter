@@ -58,6 +58,10 @@ class Utterance:
     translation: str | None = None
     polished: bool = False
     forced: bool = False
+    #: Whisper's own `avg_logprob`, when the provider offers it. Optional with a
+    #: default, so every existing construction — all of dictation — is
+    #: unchanged. Listen mode records it; nothing displays it yet.
+    confidence: float | None = None
 
 
 @dataclass
@@ -88,12 +92,26 @@ class Pipeline:
         if segment.audio is None or len(segment.audio) == 0:
             return None
 
+        confidence = None
         try:
-            raw = self.stt.transcribe(
-                segment.audio,
-                language=self.language,
-                initial_prompt=self._initial_prompt(),
-            )
+            if self.mode == "listen":
+                # Only listen mode asks for the numbers. Dictation keeps the
+                # call it has always made.
+                from backend.providers.stt import transcribe_detailed
+
+                detail = transcribe_detailed(
+                    self.stt,
+                    segment.audio,
+                    language=self.language,
+                    initial_prompt=self._initial_prompt(),
+                )
+                raw, confidence = detail.text, detail.confidence
+            else:
+                raw = self.stt.transcribe(
+                    segment.audio,
+                    language=self.language,
+                    initial_prompt=self._initial_prompt(),
+                )
         except Exception:
             # One bad segment must not end the session. The speaker is still
             # talking and the next utterance is a second away.
@@ -124,6 +142,7 @@ class Pipeline:
             translation=translation,
             polished=polished,
             forced=segment.forced,
+            confidence=confidence,
         )
         self._index += 1
         self._previous_text = raw

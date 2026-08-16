@@ -84,3 +84,54 @@ class MlxWhisperProvider:
 
         result = mlx_whisper.transcribe(audio, **options)
         return result["text"].strip()
+
+    def transcribe_detailed(self, audio, language=None, initial_prompt=None):
+        """The same call, keeping the numbers `transcribe()` discards.
+
+        Whisper reports `avg_logprob` and `no_speech_prob` per segment and this
+        provider was dropping both. Listen mode wants them: a meeting cannot be
+        repeated, so knowing which lines the model was unsure about is what
+        tells the reader where to spend their attention.
+        """
+        from backend.providers.stt import Detailed
+
+        if audio is None or len(audio) == 0:
+            return Detailed(text="")
+
+        import mlx_whisper
+
+        options = {
+            "path_or_hf_repo": self._repo(),
+            "temperature": TEMPERATURE,
+            "condition_on_previous_text": CONDITION_ON_PREVIOUS,
+            "language": language,
+        }
+        if initial_prompt:
+            options["initial_prompt"] = initial_prompt
+
+        result = mlx_whisper.transcribe(audio, **options)
+        segments = result.get("segments") or []
+        return Detailed(
+            text=(result.get("text") or "").strip(),
+            confidence=_weighted(segments, "avg_logprob"),
+            no_speech=_weighted(segments, "no_speech_prob"),
+        )
+
+
+def _weighted(segments, key):
+    """Duration-weighted mean over an utterance's segments.
+
+    Weighted rather than plain: a two-second aside and a twenty-second
+    sentence are not equally informative about how well the model heard the
+    utterance as a whole.
+    """
+    total = 0.0
+    weight = 0.0
+    for segment in segments:
+        value = segment.get(key)
+        if value is None:
+            continue
+        span = max(float(segment.get("end", 0)) - float(segment.get("start", 0)), 0.01)
+        total += float(value) * span
+        weight += span
+    return total / weight if weight else None
