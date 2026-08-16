@@ -729,6 +729,20 @@ def cmd_listen(args, out, *, stt=None, translate=None, mic=None, complete=None) 
 
     session = ListenSession.create(title=args.title or "")
     session.start()
+
+    # 铁律 3's one exception (计划 §3.2): the recording lives for the length of
+    # the meeting so a garbled line can be checked, and is deleted at 结束.
+    # Sweep first — a session that crashed last time must not leave a recording
+    # of other people talking sitting in the home directory.
+    from backend.session_audio import SessionRecording, sweep
+
+    swept = sweep()
+    if swept:
+        print(f"（清掉了 {swept} 份上次没删干净的会话录音）", file=out)
+    recording = SessionRecording(session.directory)
+    if not args.no_audio:
+        recording.start()
+
     print(f"会话：{session.directory}", file=out)
     print("开始听记，Ctrl-C 结束。\n", file=out)
 
@@ -775,6 +789,7 @@ def cmd_listen(args, out, *, stt=None, translate=None, mic=None, complete=None) 
             got = False
             for chunk in source.chunks():
                 got = True
+                recording.write(chunk)
                 for event in segmenter.feed(chunk):
                     if isinstance(event, SpeechEnd):
                         pipeline.handle(event)
@@ -798,6 +813,11 @@ def cmd_listen(args, out, *, stt=None, translate=None, mic=None, complete=None) 
         if translate is not None:
             queue.stop(flush=True)
         session.stop()
+        kept = recording.seconds
+        if not recording.discard():
+            print(f"⚠ 会话录音没删掉：{recording.path}", file=out)
+        elif kept:
+            print(f"（会话录音 {kept/60:.1f} 分钟已删除）", file=out)
 
     print("\n" + ("（已结束）" if interrupted else ""), file=out)
     print(f"条目 {len(session.entries)} 条", file=out)
@@ -1167,6 +1187,8 @@ def build_parser() -> argparse.ArgumentParser:
     listen = sub.add_parser("listen", help="听记：转录会议、译中、留两份记录")
     listen.add_argument("--title", default=None, help="会话标题，默认用时间")
     listen.add_argument("--no-summary", action="store_true", help="结束时不生成纪要")
+    listen.add_argument("--no-audio", action="store_true",
+                        help="会话期间也不存录音（转录错了就无从回溯）")
 
     return parser
 

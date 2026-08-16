@@ -192,3 +192,49 @@ def test_the_microphone_is_released_even_if_something_goes_wrong(monkeypatch):
 
     assert code == 0
     assert mic.stopped >= 1, "麦克风没关"
+
+
+# --- 铁律 3's exception, end to end ---------------------------------------------
+
+
+def test_the_recording_is_gone_when_the_meeting_ends(monkeypatch):
+    """It exists so a garbled line can be checked mid-meeting. It holds other
+    people's voices, so it does not outlive the meeting."""
+    from backend.listen import list_sessions
+
+    code, output = run(monkeypatch, ["So the question of equivalence"])
+
+    assert code == 0
+    latest = list_sessions()[0]
+    assert not (latest / "audio.wav").exists(), "录音应该在结束时删掉"
+    assert (latest / "原文.md").exists(), "记录必须留下"
+
+
+def test_no_audio_skips_the_recording_entirely(monkeypatch):
+    from backend.listen import list_sessions
+
+    out = io.StringIO()
+    main(["listen", "--no-audio"], stdout=out, stt=ScriptedStt(["hello"]),
+         translate=None, mic=ScriptedMic())
+
+    assert not (list_sessions()[0] / "audio.wav").exists()
+
+
+def test_a_recording_left_by_a_crash_is_swept_at_startup(monkeypatch):
+    """The stop-time deletion cannot run if the process died. This is the other
+    half of the same promise."""
+    from backend import config as cfg
+    from backend.listen import LISTEN_DIRNAME
+    from backend.session_audio import SessionRecording
+
+    stale = cfg.DEFAULT_DIR / LISTEN_DIRNAME / "20260101-000000"
+    old = SessionRecording(stale)
+    old.start()
+    old.write(np.zeros(1600, dtype=np.float32))
+    old._close()
+    assert old.path.exists()
+
+    _, output = run(monkeypatch, ["hello"])
+
+    assert not old.path.exists(), "上次崩溃留下的录音应该被清掉"
+    assert "没删干净" in output
