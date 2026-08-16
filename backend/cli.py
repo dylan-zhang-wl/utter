@@ -780,7 +780,31 @@ def cmd_listen(args, out, *, stt=None, translate=None, mic=None, complete=None) 
     segmenter = VadSegmenter(vad_silence_ms=config.vad_silence_ms,
                              max_utterance_sec=config.max_utterance_sec)
 
-    source = mic if mic is not None else MicSource(device_index=config.input_device)
+    if mic is not None:
+        source = mic
+    elif args.source == "system" or args.app:
+        from backend.system_audio import SystemAudioSource, pids_for
+
+        pids = []
+        for name in (args.app or []):
+            found = pids_for(name)
+            if not found:
+                print(f"⚠ 找不到正在运行的「{name}」", file=out)
+            pids += found
+        # Naming the meeting application is not just tidier. A global tap
+        # picked up an unrelated video playing in another window during
+        # testing and transcribed it into the middle of the meeting — and it
+        # would have recorded it too.
+        if args.source == "system" and not pids:
+            print("提示：没指定 --app，会录下整台机器的声音"
+                  "（包括通知声和其它正在播放的东西）", file=out)
+        try:
+            source = SystemAudioSource(pids=pids)
+        except Exception as exc:
+            print(f"系统音频用不了：{exc}", file=out)
+            return 1
+    else:
+        source = MicSource(device_index=config.input_device)
     interrupted = False
     try:
         source.start()
@@ -1187,6 +1211,11 @@ def build_parser() -> argparse.ArgumentParser:
     listen = sub.add_parser("listen", help="听记：转录会议、译中、留两份记录")
     listen.add_argument("--title", default=None, help="会话标题，默认用时间")
     listen.add_argument("--no-summary", action="store_true", help="结束时不生成纪要")
+    listen.add_argument("--source", choices=["mic", "system"], default="mic",
+                        help="mic=线下会议（麦克风），system=线上会议（系统音频）")
+    listen.add_argument("--app", action="append",
+                        help="只录这个程序的声音，可重复。强烈建议指定，"
+                             "否则会把整台机器的声音都录进去")
     listen.add_argument("--no-audio", action="store_true",
                         help="会话期间也不存录音（转录错了就无从回溯）")
 
