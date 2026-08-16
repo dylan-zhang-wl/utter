@@ -64,6 +64,39 @@ def test_an_unnumbered_reply_translates_nothing_rather_than_guessing():
     assert parse_batch("第一\n第二", 2) == {}
 
 
+def test_a_batch_of_one_is_accepted_unnumbered():
+    """Measured against gpt-5.4-mini, not assumed: three numbered lines come
+    back numbered, and a single numbered line comes back bare — the model
+    decides the number is clutter. Every max_wait flush, every 暂停 and the
+    final flush at 结束 can carry exactly one entry, so rejecting this would
+    have silently dropped the last sentence of every meeting.
+
+    Safe for the same reason the numbering exists: with one entry there is
+    nothing to misalign it against.
+    """
+    assert parse_batch("因此，等值问题其实根本不是一个关于词语的问题。", 1) == {
+        0: "因此，等值问题其实根本不是一个关于词语的问题。"}
+
+
+def test_a_batch_of_one_still_prefers_the_number_when_there_is_one():
+    assert parse_batch("1. 第一", 1) == {0: "第一"}
+
+
+def test_a_wrapped_single_translation_is_joined_rather_than_truncated():
+    assert parse_batch("因此，等值问题\n并不是关于词语的。", 1) == {
+        0: "因此，等值问题\n并不是关于词语的。"}
+
+
+def test_an_empty_reply_for_one_entry_translates_nothing():
+    assert parse_batch("   \n  ", 1) == {}
+
+
+def test_two_entries_still_refuse_an_unnumbered_reply():
+    """The leniency is for batches of one only. With two, pairing by position
+    is exactly the mistake the numbering exists to prevent."""
+    assert parse_batch("第一\n第二", 2) == {}
+
+
 def test_several_punctuation_styles_of_numbering_are_accepted():
     """Models emit 1. / 1、/ 1: fairly interchangeably."""
     assert parse_batch("1、第一\n2: 第二\n3) 第三", 3) == {

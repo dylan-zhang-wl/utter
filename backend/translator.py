@@ -66,7 +66,24 @@ def parse_batch(reply: str, count: int) -> dict[int, str]:
         text = match.group(2).strip()
         if 0 <= position < count and text and position not in found:
             found[position] = text
-    return found
+    if found or count != 1:
+        return found
+
+    # A batch of one comes back unnumbered, and reliably so: asked to render a
+    # single numbered line, the model decides the number is clutter and returns
+    # the bare translation. Measured against gpt-5.4-mini — three lines came
+    # back numbered perfectly, one line came back as 「因此，等值问题其实根本不是
+    # 一个关于词语的问题。」 with no 「1.」 in sight.
+    #
+    # That case is not rare. Every max_wait flush, every 暂停 and the final
+    # flush at 结束 can carry a single entry, so refusing to translate it would
+    # have quietly dropped the last sentence of every meeting.
+    #
+    # Taking the whole reply is safe here for the reason the numbering exists:
+    # with one entry there is nothing to misalign it against.
+    whole = "\n".join(line.strip() for line in (reply or "").splitlines()
+                      if line.strip()).strip()
+    return {0: whole} if whole else {}
 
 
 class TranslationQueue:
