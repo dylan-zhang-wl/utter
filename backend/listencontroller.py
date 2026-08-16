@@ -40,7 +40,13 @@ class ListenController:
         self._stop = threading.Event()
         self._started_at = None
         self._activity = None
+        self._sentences = None
+        self._next_index = 0
         self.error: str | None = None
+        #: Whether 结束 also writes 纪要.md. The author asked whether it was
+        #: forced; it was, and it should not be — a summary is several model
+        #: round trips and not every meeting wants one.
+        self.summarise_at_end = True
 
     @property
     def running(self) -> bool:
@@ -117,6 +123,14 @@ class ListenController:
             vad_silence_ms=self.config.listen_silence_ms,
             max_utterance_sec=self.config.listen_max_seconds,
             min_utterance_sec=self.config.listen_min_seconds)
+        from backend.sentences import SentenceAssembler
+
+        # Sentences are cut from the text, not from the silence. The VAD finds
+        # *a* boundary cheaply; Whisper's punctuation says where the sentence
+        # actually ended, and a chunk that stops mid-sentence hands its tail to
+        # the next one.
+        self._sentences = SentenceAssembler()
+        self._next_index = 0
         self._source = self._open_source(source, pids, device)
         self._source.start()
         self._hold_awake()
@@ -199,6 +213,14 @@ class ListenController:
             for event in self._segmenter.flush():
                 if isinstance(event, SpeechEnd):
                     self._pipeline.handle(event)
+            self._flush_sentences()
+
+    def _flush_sentences(self) -> None:
+        """铁律 8: a speaker stopping mid-thought must not cost the thought."""
+        if self._sentences is None or self._last_utterance is None:
+            return
+        for source in self._sentences.flush():
+            self._emit(source, self._last_utterance)
 
     def _warn_if_silent(self) -> None:
         """Say it out loud rather than producing an empty transcript.
@@ -230,7 +252,10 @@ class ListenController:
             self._last_second = seconds
             self.window.set_clock(f"{seconds // 60:02d}:{seconds % 60:02d}")
 
+    _last_utterance = None
+
     def _on_utterance(self, utterance) -> None:
+        self._last_utterance = utterance
         from backend.listen import Entry
         from backend.providers.llm import strip_fillers
         from backend.punctuation import collapse_repetition, is_hallucination
@@ -246,13 +271,22 @@ class ListenController:
         #
         # Confidence does not catch this — that entry scored -0.147, right in
         # the middle of the healthy range — so the guard has to be structural.
-        source, removed = collapse_repetition(utterance.raw_text)
+        text, removed = collapse_repetition(utterance.raw_text)
         if removed:
             log.warning("折叠了 %d 次复读：%d 字 → %d 字",
-                        removed, len(utterance.raw_text), len(source))
-        entry = Entry(index=utterance.index, started_at=utterance.start_sec,
+                        removed, len(utterance.raw_text), len(text))
+
+        for source in self._sentences.feed(text):
+            self._emit(source, utterance)
+
+    def _emit(self, source: str, utterance) -> None:
+        """One finished sentence into the record and onto the screen."""
+        from backend.listen import Entry
+        from backend.providers.llm import strip_fillers
+        entry = Entry(index=self._next_index, started_at=utterance.start_sec,
                       source=source, display=strip_fillers(source),
                       forced=utterance.forced, confidence=utterance.confidence)
+        self._next_index += 1
         self.session.add(entry)
         if self.window is not None:
             self.window.append(entry.index, entry.display)
@@ -315,7 +349,8 @@ class ListenController:
             self.recording = None
         self._release_awake()
 
-        if summarise and self.session is not None and self.session.entries:
+        if (summarise and self.summarise_at_end
+                and self.session is not None and self.session.entries):
             self._write_summary()
 
     def _write_summary(self) -> None:

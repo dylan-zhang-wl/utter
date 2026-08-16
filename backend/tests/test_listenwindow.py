@@ -367,11 +367,14 @@ def test_the_status_line_says_what_is_happening():
     assert str(window.listen_pane._status.stringValue()) == ""
 
 
-def test_translation_no_longer_waits_for_three_sentences():
-    """Making the segments whole sentences tripled the translation latency:
-    at 5-12s an entry, a batch of three is 15-36 seconds before any Chinese."""
+def test_translation_waits_for_at_most_one_more_sentence():
+    """Two constraints pulling opposite ways, and the setting has to satisfy
+    both. A batch of three was 15-36 seconds of nothing once entries became
+    whole sentences; a batch of one arrived fast and read like unrelated
+    fragments, because the model never saw two sentences together. Two is the
+    pair that coheres at the cost of one sentence of lag."""
     from backend.config import AppConfig
 
     config = AppConfig()
-    assert config.translate_batch == 1
-    assert config.translate_wait_seconds <= 2.0
+    assert config.translate_batch == 2
+    assert config.translate_wait_seconds <= 3.0

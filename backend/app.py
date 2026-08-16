@@ -298,6 +298,7 @@ def _run(log) -> int:
     from backend.listencontroller import ListenController
 
     listen = ListenController(config, window=window)
+    listen.summarise_at_end = bool(getattr(config, "summarise_at_end", True))
     menu.listen = listen
 
     def toggle_meeting():

@@ -169,8 +169,16 @@ class AppConfig(BaseModel):
     # One at a time, and a short wait. It costs more requests per meeting and
     # the previous two entries still go along as context, so nothing is lost
     # but the batching.
-    translate_batch: int = 1
-    translate_wait_seconds: float = 1.5
+    # Two, not one. With whole sentences arriving every few seconds, a pair
+    # gives the model something to make cohere — a pronoun in the second
+    # sentence can see its referent in the first — while costing at most one
+    # sentence of lag. Translating each in isolation was fast and read like a
+    # list of unrelated fragments.
+    translate_batch: int = 2
+    translate_wait_seconds: float = 2.5
+
+    # 结束时自动生成纪要。关掉的话记录照写，只是不跑那几次模型往返。
+    summarise_at_end: bool = True
 
     # Where to cut, measured on the author's own dictation 2026-08-11. The
     # numbers matter more than they look:
