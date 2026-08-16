@@ -157,6 +157,21 @@ class AppConfig(BaseModel):
     # listen_max_seconds, and nothing arrives in fragments shorter than this.
     listen_min_seconds: float = 4.0
 
+    # How many sentences travel in one translation request, and how long the
+    # queue may hold a lone one.
+    #
+    # This started at 3 and 8s, which was right when entries arrived every two
+    # seconds: batching bought back the round trips. Making the segments whole
+    # sentences broke that arithmetic — at 5-12 seconds an entry, waiting for
+    # three of them is 15 to 36 seconds before any Chinese appears. Fixing the
+    # transcription latency had quietly tripled the translation latency.
+    #
+    # One at a time, and a short wait. It costs more requests per meeting and
+    # the previous two entries still go along as context, so nothing is lost
+    # but the batching.
+    translate_batch: int = 1
+    translate_wait_seconds: float = 1.5
+
     # Where to cut, measured on the author's own dictation 2026-08-11. The
     # numbers matter more than they look:
     #

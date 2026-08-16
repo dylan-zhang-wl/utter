@@ -63,6 +63,7 @@ class TranscriptPane:
         self._choices = []
         self._button = None
         self._pause = None
+        self._status = None
         self.on_pause = None
         self._delegate = None
         #: entry index -> the range in the text holding its translation
@@ -291,6 +292,11 @@ class TranscriptPane:
             1, AppKit.NSLayoutConstraintOrientationHorizontal)
         row.addArrangedSubview_(spacer)
 
+        self._status = AppKit.NSTextField.labelWithString_("")
+        self._status.setFont_(AppKit.NSFont.systemFontOfSize_(11))
+        self._status.setTextColor_(AppKit.NSColor.secondaryLabelColor())
+        row.addArrangedSubview_(self._status)
+
         self._pause = AppKit.NSButton.buttonWithTitle_target_action_(
             "暂停", self._delegate, "pause:")
         self._pause.setBezelStyle_(AppKit.NSBezelStyleRounded)
@@ -320,6 +326,19 @@ class TranscriptPane:
 
     def set_running(self, running: bool) -> None:
         _on_main(lambda: self._set_running(running))
+
+    def set_status_line(self, text) -> None:
+        """A word about what is happening, where the clock is.
+
+        Ending a meeting runs several model round trips for the summary, and
+        until now the window said nothing at all through them — which reads as
+        the application having ignored 结束.
+        """
+        def run():
+            if self._status is not None:
+                self._status.setStringValue_(text or "")
+
+        _on_main(run)
 
     def set_preparing(self, preparing: bool) -> None:
         """Loading the model and opening a device takes seconds. Say so.
@@ -467,6 +486,13 @@ class TranscriptPane:
             0.99, 0.98, 0.95, 0.55))
         paper.setContentViewMargins_(AppKit.NSMakeSize(0, 0))
         self._paper = paper
+
+        # Lay out only what is on screen. Without this TextKit re-flows the
+        # entire document on every width change, and a meeting's transcript
+        # only grows: measured at 150 entries a resize already cost 11-21ms,
+        # and a resize gesture sends a stream of those. Non-contiguous layout
+        # is the supported way to make a long, append-only document behave.
+        text.layoutManager().setAllowsNonContiguousLayout_(True)
 
         scroll.setDocumentView_(text)
         # After setDocumentView_, not before: measured, the text view came out

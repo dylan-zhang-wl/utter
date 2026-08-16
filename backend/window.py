@@ -197,6 +197,10 @@ class MainWindow:
         if self.listen_pane:
             self.listen_pane.set_preparing(preparing)
 
+    def set_status_line(self, text):
+        if self.listen_pane:
+            self.listen_pane.set_status_line(text)
+
     def say(self, title: str, message: str, *, settings_url: str | None = None) -> None:
         """A sheet on the main window, from any thread.
 

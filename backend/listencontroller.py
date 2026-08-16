@@ -102,7 +102,9 @@ class ListenController:
 
         self._queue = TranslationQueue(
             self._translate or (lambda text, context=None: None),
-            self._on_translation)
+            self._on_translation,
+            batch_size=max(1, int(self.config.translate_batch)),
+            max_wait=float(self.config.translate_wait_seconds))
         if self._translate is not None:
             self._queue.start()
 
@@ -321,8 +323,26 @@ class ListenController:
 
         if self._complete is None:
             log.info("没有可用的模型，跳过纪要")
+            self._tell("会议记录已保存", "没有可用的模型，所以没有生成纪要。")
             return
+        self._tell_status("正在生成纪要…")
         try:
-            make_summary(self.session, self._complete)
+            written = make_summary(self.session, self._complete)
         except Exception:  # pragma: no cover - summarise already guards itself
             log.warning("纪要生成失败，记录不受影响", exc_info=True)
+            written = None
+        self._tell_status(None)
+        self._tell(
+            "会议记录已保存" if written else "会议记录已保存（纪要没生成）",
+            f"{len(self.session.entries)} 条\n\n"
+            f"{self.session.directory}\n\n"
+            "原文.md 一字不少，对照.md 是中英对照"
+            + ("，纪要.md 是会后整理。" if written else "。"))
+
+    def _tell(self, title: str, body: str) -> None:
+        if self.window is not None and hasattr(self.window, "say"):
+            self.window.say(title, body)
+
+    def _tell_status(self, text) -> None:
+        if self.window is not None and hasattr(self.window, "set_status_line"):
+            self.window.set_status_line(text)

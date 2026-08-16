@@ -318,3 +318,60 @@ def test_pause_toggles_and_reports_state():
     controller = ListenController(AppConfig())
     assert controller.pause() is True
     assert controller.pause() is False
+
+
+# --- the things that made it feel unfinished ------------------------------------
+
+
+def test_the_transcript_lays_out_only_what_is_visible():
+    """TextKit re-flows the whole document on a width change by default, and a
+    meeting's transcript only grows. Measured before this: 11-21ms per resize
+    at 150 entries, rising with length; after: 5-10ms and flat to 400."""
+    window = _main_window()
+    assert window._build()
+    assert window.listen_pane._text.layoutManager().allowsNonContiguousLayout()
+
+
+def test_resizing_stays_cheap_as_the_meeting_grows():
+    import time
+
+    window = _main_window()
+    assert window._build()
+    pane = window.listen_pane
+    for i in range(300):
+        pane.append(i, "So the question of equivalence is not about words at all.",
+                    "因此，等值问题其实根本不是一个关于词语的问题。")
+
+    worst = 0.0
+    for width in (420, 380, 460, 400):
+        frame = window._window.frame()
+        frame.size.width = width
+        start = time.perf_counter()
+        window._window.setFrame_display_(frame, True)
+        window._window.contentView().layoutSubtreeIfNeeded()
+        worst = max(worst, (time.perf_counter() - start) * 1000)
+
+    assert worst < 40, f"300 条时改窗口大小要 {worst:.0f}ms，会看出卡顿"
+
+
+def test_the_status_line_says_what_is_happening():
+    """Ending a meeting runs several model round trips. Saying nothing through
+    them reads as the application having ignored the click."""
+    window = _main_window()
+    assert window._build()
+
+    window.set_status_line("正在生成纪要…")
+    assert "纪要" in str(window.listen_pane._status.stringValue())
+
+    window.set_status_line(None)
+    assert str(window.listen_pane._status.stringValue()) == ""
+
+
+def test_translation_no_longer_waits_for_three_sentences():
+    """Making the segments whole sentences tripled the translation latency:
+    at 5-12s an entry, a batch of three is 15-36 seconds before any Chinese."""
+    from backend.config import AppConfig
+
+    config = AppConfig()
+    assert config.translate_batch == 1
+    assert config.translate_wait_seconds <= 2.0
