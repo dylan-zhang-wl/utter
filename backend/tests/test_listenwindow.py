@@ -255,3 +255,24 @@ def test_every_listed_source_maps_to_something_real():
     for kind, device in pane._choices:
         assert kind in ("mic", "system")
         assert kind == "system" or isinstance(device, int)
+
+
+def test_the_window_forwards_everything_the_controller_calls():
+    """The button fired, then died on window.set_preparing — added to the pane
+    and never forwarded from the window — and AppKit swallowed the
+    AttributeError, so the control looked inert with an empty log. The
+    forwarding surface is small enough to just assert."""
+    window = _main_window()
+    assert window._build()
+
+    for name in ("append", "translated", "set_clock", "set_listening",
+                 "set_preparing", "show_listen"):
+        assert callable(getattr(window, name, None)), f"窗口少了 {name}"
+
+    # and they must not raise when called, which is what the controller does
+    window.set_preparing(True)
+    window.set_preparing(False)
+    window.set_listening(True)
+    window.set_clock("01:23")
+    window.append(0, "hello", "你好")
+    window.translated(0, "你好啊")

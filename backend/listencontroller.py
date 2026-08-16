@@ -158,9 +158,14 @@ class ListenController:
 
     # -- the pump ----------------------------------------------------------
 
+    #: How long to wait before deciding that silence is a permission problem
+    #: rather than a quiet room.
+    SILENCE_CHECK_SECONDS = 6.0
+
     def _run(self) -> None:
         from backend.vad import SpeechEnd
 
+        checked_silence = False
         try:
             while not self._stop.is_set():
                 got = False
@@ -176,12 +181,38 @@ class ListenController:
                     log.warning("音源停了：%s", self._source.stopped_reason)
                     break
                 self._tick_clock()
+                if (not checked_silence and self._started_at is not None
+                        and time.monotonic() - self._started_at > self.SILENCE_CHECK_SECONDS):
+                    checked_silence = True
+                    self._warn_if_silent()
         except Exception:
             log.warning("听记循环出错", exc_info=True)
         finally:
             for event in self._segmenter.flush():
                 if isinstance(event, SpeechEnd):
                     self._pipeline.handle(event)
+
+    def _warn_if_silent(self) -> None:
+        """Say it out loud rather than producing an empty transcript.
+
+        A tap that was granted and then fed zeros looks exactly like a meeting
+        nobody has started talking in. The difference matters: one resolves
+        itself, the other never will, and the user finds out at the end of the
+        lecture either way.
+        """
+        check = getattr(self._source, "silence_warning", None)
+        if check is None:
+            return
+        why = check()
+        if not why:
+            return
+        log.warning("听记收不到声音：%s", why.replace("\n", " "))
+        self.error = why
+        if self.window is not None and hasattr(self.window, "say"):
+            self.window.say(
+                "听记没有收到声音", why,
+                settings_url="x-apple.systempreferences:"
+                             "com.apple.preference.security?Privacy_AudioCapture")
 
     def _tick_clock(self) -> None:
         if self.window is None or self._started_at is None:

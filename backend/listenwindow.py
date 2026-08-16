@@ -69,35 +69,6 @@ class TranscriptPane:
 
     # -- public ------------------------------------------------------------
 
-    def show(self) -> None:
-        def run():
-            if self._window is None and not self._build():
-                return
-            import AppKit
-
-            AppKit.NSApp().setActivationPolicy_(
-                AppKit.NSApplicationActivationPolicyRegular)
-            self._window.makeKeyAndOrderFront_(None)
-            # Activate on the NEXT run-loop turn, not this one.
-            #
-            # setActivationPolicy_ from Accessory to Regular does not take
-            # effect until the run loop turns, so activating immediately after
-            # it lands while the app is still an accessory — and an accessory
-            # app is not "active", which means the main menu never receives key
-            # equivalents. The window appeared and ⌘W did nothing until the
-            # user clicked on it. Measured: frontmost=false with a window
-            # visible; frontmost=true and ⌘W working once activation happened
-            # a beat later.
-            def activate():
-                AppKit.NSApp().activateIgnoringOtherApps_(True)
-                self._window.makeKeyAndOrderFront_(None)
-
-            AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
-                0.0, False, lambda _t: activate())
-
-
-        _on_main(run)
-
     def append(self, index: int, source: str, translation: str | None = None) -> None:
         """Add one utterance. The Chinese may arrive later; see `translated`."""
         def run():
@@ -420,9 +391,15 @@ class TranscriptPane:
 
         class UtterTranscriptDelegate(AppKit.NSObject):
             def toggle_(self, _s):
-                owner = self.owner
-                if owner.on_toggle:
-                    owner.on_toggle()
+                # Guarded for the reason in window.py: AppKit swallows whatever
+                # an action handler raises, so an unguarded failure here is a
+                # button that silently does nothing.
+                try:
+                    owner = self.owner
+                    if owner.on_toggle:
+                        owner.on_toggle()
+                except Exception:
+                    log.warning("开始/结束听记出错", exc_info=True)
 
         UtterTranscriptDelegate.owner = None
         TranscriptPane._delegate_class_cache = UtterTranscriptDelegate

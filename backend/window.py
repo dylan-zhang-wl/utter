@@ -152,6 +152,38 @@ class MainWindow:
         if self.listen_pane:
             self.listen_pane.set_running(running)
 
+    def set_preparing(self, preparing: bool):
+        if self.listen_pane:
+            self.listen_pane.set_preparing(preparing)
+
+    def say(self, title: str, message: str, *, settings_url: str | None = None) -> None:
+        """A sheet on the main window, from any thread.
+
+        `settings_url` puts the user one click from the pane that fixes it.
+        Telling somebody the name of a checkbox is not the same as showing it
+        to them, and macOS's privacy panes are not where their names suggest.
+        """
+        def run():
+            import AppKit
+
+            if self._window is None:
+                return
+            alert = AppKit.NSAlert.alloc().init()
+            alert.setMessageText_(title)
+            alert.setInformativeText_(message)
+            alert.addButtonWithTitle_("打开设置" if settings_url else "好")
+            if settings_url:
+                alert.addButtonWithTitle_("以后再说")
+
+            def done(response):
+                if settings_url and response == AppKit.NSAlertFirstButtonReturn:
+                    AppKit.NSWorkspace.sharedWorkspace().openURL_(
+                        AppKit.NSURL.URLWithString_(settings_url))
+
+            alert.beginSheetModalForWindow_completionHandler_(self._window, done)
+
+        _on_main(run)
+
     # -- build ------------------------------------------------------------
 
     #: Registered once per process. Objective-C has one flat class namespace,
@@ -169,6 +201,25 @@ class MainWindow:
         import AppKit
 
         outer = self  # rebound below for later instances
+
+        def guarded(fn):
+            """Log what AppKit would otherwise swallow.
+
+            An exception raised inside an action handler does not reach the
+            console, the log, or the user: the event loop eats it and the
+            control simply appears inert. That has now cost two debugging
+            rounds — a selector typo, then a missing forwarder — with
+            identical symptoms and an empty log both times. A control that
+            fails must say so.
+            """
+            def wrapped(self, sender=None):
+                try:
+                    return fn(self, sender)
+                except Exception:
+                    log.warning("界面动作 %s 出错", fn.__name__, exc_info=True)
+                    return None
+            wrapped.__name__ = fn.__name__
+            return wrapped
 
         class UtterWindowDelegate(AppKit.NSObject):
             def windowShouldClose_(self, _s):
@@ -289,6 +340,10 @@ class MainWindow:
             column.setTranslatesAutoresizingMaskIntoConstraints_(False)
             blur.addSubview_(column)
             AppKit.NSLayoutConstraint.activateConstraints_([
+                # Placed by the page, not by a bare width. Replacing the four
+                # edge constraints with a lone width left the column with no
+                # position at all: it sat at x=0 with no margin and ran off the
+                # right of the window.
                 column.widthAnchor().constraintEqualToConstant_(WIDTH - PAD * 2),
             ])
 
@@ -339,10 +394,10 @@ class MainWindow:
             settings_page.addSubview_(column)
             AppKit.NSLayoutConstraint.activateConstraints_([
                 column.topAnchor().constraintEqualToAnchor_(settings_page.topAnchor()),
-                column.leadingAnchor().constraintEqualToAnchor_(
-                    settings_page.leadingAnchor()),
-                column.trailingAnchor().constraintEqualToAnchor_(
-                    settings_page.trailingAnchor()),
+                column.leadingAnchor().constraintEqualToAnchor_constant_(
+                    settings_page.leadingAnchor(), PAD),
+                column.trailingAnchor().constraintLessThanOrEqualToAnchor_constant_(
+                    settings_page.trailingAnchor(), -PAD),
             ])
 
             from backend.listenwindow import TranscriptPane

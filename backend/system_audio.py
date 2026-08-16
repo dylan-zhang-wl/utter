@@ -175,6 +175,11 @@ class SystemAudioSource:
         self.last_chunk = None
         self.stopped_reason: str | None = None
         self.first_chunk_at: float | None = None
+        #: Loudest sample seen. macOS grants a tap and then hands it silence
+        #: when the app lacks "System Audio Recording" — no error, no prompt,
+        #: exactly the shape the microphone permission has. A run of perfect
+        #: zeros is never a measurement.
+        self.peak = 0.0
 
     # -- Core Audio plumbing ----------------------------------------------
 
@@ -297,6 +302,9 @@ class SystemAudioSource:
         converted = self._resampler(indata)
         if not len(converted):
             return
+        loudest = float(np.abs(converted).max())
+        if loudest > self.peak:
+            self.peak = loudest
         with self._lock:
             self._pending = np.concatenate([self._pending, converted])
             while len(self._pending) >= self._chunk_samples:
@@ -325,6 +333,20 @@ class SystemAudioSource:
                 yield self._queue.get_nowait()
             except queue.Empty:
                 return
+
+    def silence_warning(self) -> str | None:
+        """Why nothing is being heard, if nothing is being heard.
+
+        Called after a few seconds of capture. Distinguishes "the meeting has
+        not started talking yet" from "macOS is handing us zeros", which look
+        identical from inside and have completely different fixes.
+        """
+        if self.peak > 0.0005:
+            return None
+        return ("没有从系统音频收到任何声音。\n\n"
+                "如果电脑确实在播声音，多半是权限：\n"
+                "系统设置 → 隐私与安全性 → 系统录音，把 Utter 打开。\n\n"
+                "macOS 在没有这个权限时不会报错，只会一直给静音。")
 
     @property
     def running(self) -> bool:
