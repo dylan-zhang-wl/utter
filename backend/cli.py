@@ -672,7 +672,20 @@ def build_translate(config):
     return translate
 
 
-def cmd_listen(args, out, *, stt=None, translate=None, mic=None) -> int:
+def build_complete(config):
+    """The raw `complete(system, user)` call, or None.
+
+    The summary needs the model directly rather than through the translation
+    wrapper, and it is the only thing that does.
+    """
+    provider = _llm_provider_named(config.llm_provider, config)
+    if provider is None or not hasattr(provider, "complete"):
+        return None
+    available, _reason = provider.is_available()
+    return provider.complete if available else None
+
+
+def cmd_listen(args, out, *, stt=None, translate=None, mic=None, complete=None) -> int:
     """听记 — transcribe a meeting, translate it, keep two records.
 
     P3 task 3. No window yet: this is the assembly, and it exists first so the
@@ -787,6 +800,23 @@ def cmd_listen(args, out, *, stt=None, translate=None, mic=None) -> int:
 
     print("\n" + ("（已结束）" if interrupted else ""), file=out)
     print(f"条目 {len(session.entries)} 条", file=out)
+
+    # The summary runs last, on purpose. Both records are already on disk by
+    # now, so a model that is unreachable — or that writes nonsense — costs the
+    # summary and nothing that cannot be redone.
+    if not args.no_summary and session.entries:
+        if complete is None:
+            complete = build_complete(config)
+        if complete is None:
+            print("（没有可用的模型，跳过纪要）", file=out)
+        else:
+            print("正在生成纪要…", file=out, flush=True)
+            from backend.summary import SUMMARY_FILE, summarise
+
+            if summarise(session, complete) is not None:
+                print(f"纪要：    {session.directory / SUMMARY_FILE}", file=out)
+            else:
+                print("（纪要没有生成，记录不受影响）", file=out)
     if dropped_hallucinations:
         print(f"丢掉静音幻觉 {dropped_hallucinations} 条", file=out)
     print(f"逐字记录：{session.verbatim_path}", file=out)
@@ -1135,6 +1165,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     listen = sub.add_parser("listen", help="听记：转录会议、译中、留两份记录")
     listen.add_argument("--title", default=None, help="会话标题，默认用时间")
+    listen.add_argument("--no-summary", action="store_true", help="结束时不生成纪要")
 
     return parser
 
