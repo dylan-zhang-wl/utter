@@ -38,6 +38,7 @@ __all__ = [
     "safe_translate",
     "polish_prompt",
     "TRANSLATE_PROMPT",
+    "translate_prompt",
     "httpx",
 ]
 
@@ -274,11 +275,55 @@ def strip_fillers(text: str) -> str:
     out = _ORPHAN_LEAD.sub(r"\1", out)
     return out.strip()
 
+#: The rule that separates an honest translation from a fluent invention.
+#:
+#: Meeting transcripts arrive with words missing — a speaker turns away, the
+#: microphone is across the room. The author asked for a translation that uses
+#: context to render those passages as complete Chinese rather than translating
+#: the damage faithfully, and that is right: unlike polish, a translation sits
+#: beside the English where he can check it.
+#:
+#: But the dictation side already showed where this goes wrong. A transcript
+#: came back as the nonsense 「我元册圆」 and the model rewrote it into the
+#: plausible 「语言核语言」. Garbled text announces itself; a fluent invention
+#: does not. So the model may join up what is there and may not manufacture
+#: what is not.
+_NO_FABRICATION = (
+    "如果某处确实听不出来，就写「……（听不清）」，"
+    "**不要编一个通顺的句子填上去**。"
+    "宁可让读者看到这里缺了一块，也不要给他一句看起来没问题、其实是猜的话。"
+)
+
+_TRANSLATE_LEVELS = {
+    "literal": "逐句忠实翻译。原文残缺的地方，译文也保持残缺，不要补。",
+    "fluent": (
+        "可以联系上文，把因为转录丢词而断掉的句子补成通顺的中文。"
+        "补的必须是上下文能支持的内容。"
+    ),
+    "explain": (
+        "可以联系上文把断句补通顺；遇到专有名词、人名、引用出处，"
+        "可以在括号里加一句极简短的说明。说明必须是常识性的，不确定就不要加。"
+    ),
+}
+
 TRANSLATE_PROMPT = (
     "你是一个学术翻译工具。把下面的英文译成中文。"
     "保持术语一致，保持原文的论证结构与语气。"
     "只输出译文，不要解释、不要附上原文。"
 )
+
+
+def translate_prompt(level: str = "fluent") -> str:
+    """The system prompt for a translation level.
+
+    Three levels shaped like the polish levels, because they are the same
+    decision seen twice: how much may the model do beyond the literal words.
+    The difference is that polish replaces what the author said and this sits
+    next to it, so the middle setting is the default here where 「轻」 is the
+    default there.
+    """
+    instruction = _TRANSLATE_LEVELS.get(level, _TRANSLATE_LEVELS["fluent"])
+    return f"{TRANSLATE_PROMPT}\n{instruction}\n{_NO_FABRICATION}"
 
 
 def polish_prompt(level: str = "light") -> str:
@@ -390,9 +435,11 @@ def safe_polish(
     return result, True
 
 
-def translate(provider, text: str, *, context: str | None = None) -> str:
+def translate(provider, text: str, *, context: str | None = None,
+              level: str = "fluent", vocabulary: list[str] | None = None) -> str:
     # A translate-only fallback (deep-translator) has no prompt interface at
-    # all, so it is called directly.
+    # all, so it is called directly. It cannot honour a level or a glossary —
+    # it is the offline last resort, not the intended path.
     if provider is not None and not hasattr(provider, "complete"):
         if hasattr(provider, "translate"):
             try:
@@ -401,16 +448,23 @@ def translate(provider, text: str, *, context: str | None = None) -> str:
                 raise LlmError(f"{getattr(provider, 'id', '?')}: {exc}") from exc
 
     return _complete(
-        provider, TRANSLATE_PROMPT, _build_user_message(text, context, None)
+        provider,
+        translate_prompt(level),
+        # The vocabulary earns its keep a second time here: it is what stops
+        # `foreignisation` coming back transliterated instead of as 异化.
+        _build_user_message(text, context, vocabulary),
     ).strip()
 
 
-def safe_translate(provider, text: str, *, context: str | None = None) -> str | None:
+def safe_translate(provider, text: str, *, context: str | None = None,
+                   level: str = "fluent",
+                   vocabulary: list[str] | None = None) -> str | None:
     """Translate, or return None. Design §5: a failed translation must never
     take the English with it — v1 wrote "[translation error]" into the
     transcript instead, which is worse than an empty column."""
     try:
-        return translate(provider, text, context=context)
+        return translate(provider, text, context=context, level=level,
+                         vocabulary=vocabulary)
     except LlmError as exc:
         log.warning("translation failed: %s", exc)
         return None

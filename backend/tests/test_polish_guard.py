@@ -214,3 +214,72 @@ def test_whisper_punctuation_is_not_lost_to_a_worse_model_output():
     less of it has nothing to offer."""
     raw = "第一句。第二句。第三句。"
     assert apply_punctuation(raw, "第一句 第二句 第三句") == raw
+
+
+# --- translation levels (P3 task 2) ---------------------------------------------
+
+
+def test_every_translation_level_forbids_inventing_text():
+    """The boundary that separates an honest translation from a fluent
+    invention. Dictation already produced the cautionary case: the nonsense
+    「我元册圆」 came back as the plausible 「语言核语言」. Garbled text
+    announces itself; a fluent invention does not."""
+    from backend.providers.llm import translate_prompt
+
+    for level in ("literal", "fluent", "explain"):
+        prompt = translate_prompt(level)
+        assert "听不清" in prompt, f"{level} 没说听不清怎么办"
+        assert "不要编" in prompt, f"{level} 没禁止编造"
+
+
+def test_the_levels_differ_in_how_much_they_may_join_up():
+    from backend.providers.llm import translate_prompt
+
+    literal, fluent, explain = (translate_prompt(x)
+                                for x in ("literal", "fluent", "explain"))
+    assert "保持残缺" in literal
+    assert "补成通顺" in fluent
+    assert "括号里加" in explain
+    assert literal != fluent != explain
+
+
+def test_an_unknown_level_falls_back_to_the_middle_one():
+    """A typo in a config file must not silently turn off the guard rails."""
+    from backend.providers.llm import translate_prompt
+
+    assert translate_prompt("nonsense") == translate_prompt("fluent")
+
+
+def test_translation_carries_the_vocabulary_through():
+    """Second use of the same glossary: it is what stops `foreignisation`
+    coming back transliterated instead of as 异化."""
+    from backend.providers import llm
+
+    seen = {}
+
+    class Fake:
+        id = "fake"
+
+        def complete(self, system, user):
+            seen["system"], seen["user"] = system, user
+            return "异化"
+
+    out = llm.translate(Fake(), "foreignisation", vocabulary=["异化"], level="fluent")
+
+    assert out == "异化"
+    assert "异化" in seen["user"]
+    assert "听不清" in seen["system"]
+
+
+def test_a_failed_translation_returns_none_rather_than_poisoning_the_record():
+    """v1 wrote "[translation error]" into the transcript. An empty column is
+    honest; a sentence that is not a translation is not."""
+    from backend.providers import llm
+
+    class Broken:
+        id = "broken"
+
+        def complete(self, system, user):
+            raise RuntimeError("no network")
+
+    assert llm.safe_translate(Broken(), "hello") is None
