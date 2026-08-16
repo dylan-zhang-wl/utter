@@ -128,6 +128,11 @@ class AppConfig(BaseModel):
     # safer default is the one that does not surprise anybody. One switch away.
     stream_while_speaking: bool = False
 
+    # 听记的翻译档位（P3 §2.2）。"literal" 忠实、"fluent" 联系上下文补通顺、
+    # "explain" 再加一句必要背景。默认取中间那档：与润色不同，译文是**并排**
+    # 摆在原文旁边的，改错了抬眼就能看见，所以这里允许解释性翻译。
+    translate_level: str = "fluent"
+
     # Where to cut, measured on the author's own dictation 2026-08-11. The
     # numbers matter more than they look:
     #

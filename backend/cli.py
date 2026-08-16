@@ -644,6 +644,165 @@ def cmd_polish(args, out) -> int:
     return 0
 
 
+
+def build_translate(config):
+    """The callable the translation queue calls, or None.
+
+    Same shape as `build_polish`, and the same contract: None means "no
+    translation", never an error. A meeting still transcribes without it.
+    """
+    from backend.providers import llm
+
+    provider = _llm_provider_named(config.llm_provider, config)
+    if provider is None:
+        log.warning("translation: unknown provider %r", config.llm_provider)
+        return None
+    available, reason = provider.is_available()
+    if not available:
+        print(f"\n⚠ 翻译用不了：{reason}\n  会照常转录，只是不译。\n", flush=True)
+        return None
+
+    level = getattr(config, "translate_level", "fluent")
+    vocabulary = list(config.vocabulary or [])
+
+    def translate(text, context=None):
+        return llm.safe_translate(provider, text, context=context,
+                                  level=level, vocabulary=vocabulary)
+
+    return translate
+
+
+def cmd_listen(args, out, *, stt=None, translate=None, mic=None) -> int:
+    """听记 — transcribe a meeting, translate it, keep two records.
+
+    P3 task 3. No window yet: this is the assembly, and it exists first so the
+    translation levels and the segmentation thresholds can be tuned against a
+    real meeting before anything is drawn.
+    """
+    import time
+
+    from backend.listen import Entry, ListenSession
+    from backend.providers.llm import strip_fillers
+    from backend.punctuation import is_hallucination
+    from backend.translator import TranslationQueue
+    from backend.vad import SAMPLE_RATE, SpeechEnd, VadSegmenter
+
+    config = load_config()
+
+    # The microphone is one device. If the dictation daemon is running it will
+    # want the same one the moment a hotkey is pressed, and in an in-person
+    # meeting the room microphone hears the author anyway — so whatever is
+    # dictated lands in the meeting transcript regardless. Say so rather than
+    # letting two features quietly fight over one input.
+    from backend.config import DEFAULT_DIR
+    from backend.instance_lock import InstanceLock
+
+    # existing_owner(), never acquire(): acquiring would take the lock away
+    # from the daemon the author is using right now.
+    owner = InstanceLock(DEFAULT_DIR / "dictate.pid").existing_owner()
+    if owner is not None:
+        print(f"⚠ 听写守护进程正在运行（进程号 {owner.pid}）。\n"
+              "  开会期间按热键口述会和听记抢麦克风，而且房间麦克风本来也听得见你，\n"
+              "  你口述的话会进到会议记录里。\n", file=out)
+
+    if stt is None:
+        try:
+            stt = get_stt_provider(preferred=config.stt_provider)
+        except NoProviderAvailable as exc:
+            print(str(exc), file=out)
+            return 1
+    if translate is None:
+        translate = build_translate(config)
+
+    session = ListenSession.create(title=args.title or "")
+    session.start()
+    print(f"会话：{session.directory}", file=out)
+    print("开始听记，Ctrl-C 结束。\n", file=out)
+
+    queue = TranslationQueue(
+        translate or (lambda text, context=None: None),
+        lambda index, text: _on_translation(session, index, text, out),
+    )
+    if translate is not None:
+        queue.start()
+
+    dropped_hallucinations = 0
+
+    def on_utterance(u):
+        nonlocal dropped_hallucinations
+        # Meetings are full of long silences — somebody changing slides, nobody
+        # speaking — and that is precisely when Whisper invents a subtitle
+        # credit. Dictation meets this occasionally; a lecture meets it
+        # constantly.
+        if is_hallucination(u.raw_text):
+            dropped_hallucinations += 1
+            log.info("丢掉一条静音幻觉：%r", u.raw_text[:40])
+            return
+        entry = Entry(index=u.index, started_at=u.start_sec, source=u.raw_text,
+                      display=strip_fillers(u.raw_text), forced=u.forced)
+        session.add(entry)
+        print(f"[{_mmss(u.start_sec)}] {entry.display}", file=out, flush=True)
+        if translate is not None:
+            queue.submit(u.index, u.raw_text)
+
+    pipeline = listen_pipeline(stt=stt, sink=on_utterance,
+                               language=config.dictate_language or "en",
+                               vocabulary=list(config.vocabulary or []),
+                               translate=None)  # the queue does it, in batches
+    segmenter = VadSegmenter(vad_silence_ms=config.vad_silence_ms,
+                             max_utterance_sec=config.max_utterance_sec)
+
+    source = mic if mic is not None else MicSource(device_index=config.input_device)
+    interrupted = False
+    try:
+        source.start()
+        print(f"麦克风：{getattr(source, 'device_name', '?')}\n", file=out)
+        while True:
+            got = False
+            for chunk in source.chunks():
+                got = True
+                for event in segmenter.feed(chunk):
+                    if isinstance(event, SpeechEnd):
+                        pipeline.handle(event)
+            if not got:
+                # chunks() never blocks — dictation ends on a key-up, not on
+                # silence — so the waiting happens here.
+                time.sleep(0.02)
+            if getattr(source, "stopped_reason", None):
+                print(f"\n麦克风停了：{source.stopped_reason}", file=out)
+                break
+    except KeyboardInterrupt:
+        interrupted = True
+    finally:
+        try:
+            source.stop()
+        except Exception:
+            pass
+        for event in segmenter.flush():
+            if isinstance(event, SpeechEnd):
+                pipeline.handle(event)
+        if translate is not None:
+            queue.stop(flush=True)
+        session.stop()
+
+    print("\n" + ("（已结束）" if interrupted else ""), file=out)
+    print(f"条目 {len(session.entries)} 条", file=out)
+    if dropped_hallucinations:
+        print(f"丢掉静音幻觉 {dropped_hallucinations} 条", file=out)
+    print(f"逐字记录：{session.verbatim_path}", file=out)
+    print(f"中英对照：{session.bilingual_path}", file=out)
+    return 0
+
+
+def _on_translation(session, index, text, out) -> None:
+    session.set_translation(index, text)
+    print(f"          → {text}", file=out, flush=True)
+
+
+def _mmss(seconds: float) -> str:
+    return f"{int(seconds) // 60:02d}:{int(seconds) % 60:02d}"
+
+
 def cmd_dictate(args, out, *, stt=None, polish=None) -> int:
     """Run the resident dictation daemon until interrupted."""
     from backend.daemon import DictationDaemon
@@ -974,6 +1133,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="不显示浮窗和菜单栏，纯终端运行")
     dictate.add_argument("--timing", action="store_true", help="print a latency breakdown per utterance")
 
+    listen = sub.add_parser("listen", help="听记：转录会议、译中、留两份记录")
+    listen.add_argument("--title", default=None, help="会话标题，默认用时间")
+
     return parser
 
 
@@ -1007,6 +1169,8 @@ def main(argv=None, stdout=None, **overrides) -> int:
         return keyprobe.run(out, seconds=args.seconds)
     if args.command == "dictate":
         return cmd_dictate(args, out, **overrides)
+    if args.command == "listen":
+        return cmd_listen(args, out, **overrides)
 
     parser.print_help(out)
     return 2
