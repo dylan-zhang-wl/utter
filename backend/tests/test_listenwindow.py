@@ -276,3 +276,45 @@ def test_the_window_forwards_everything_the_controller_calls():
     window.set_clock("01:23")
     window.append(0, "hello", "你好")
     window.translated(0, "你好啊")
+
+
+def test_recording_shrinks_the_window_to_a_bookmark_and_restores_it():
+    """The author watches the transcript beside something else, so the
+    full-width settings shape is wrong for the only moment it is read."""
+    window = _main_window()
+    assert window._build()
+    before = window._window.frame()
+
+    window.set_listening(True)
+    small = window._window.frame()
+    assert small.size.width < before.size.width, "开始后应该收窄成书签"
+    assert window._tabs.isHidden(), "录制时只有一页，不该还显示切换器"
+
+    window.set_listening(False)
+    after = window._window.frame()
+    assert abs(after.size.width - before.size.width) < 1, "结束后应该复原"
+    assert not window._tabs.isHidden()
+
+
+def test_pause_is_offered_only_while_recording():
+    window = _main_window()
+    assert window._build()
+    pane = window.listen_pane
+
+    pane._set_running(False)
+    assert pane._pause.isHidden(), "没在录的时候不该有暂停"
+
+    pane._set_running(True)
+    assert not pane._pause.isHidden()
+    assert str(pane._pause.title()) == "暂停"
+
+
+def test_pause_toggles_and_reports_state():
+    """Pausing writes both records and stops feeding the segmenter, so a coffee
+    break does not become a paragraph of room noise."""
+    from backend.config import AppConfig
+    from backend.listencontroller import ListenController
+
+    controller = ListenController(AppConfig())
+    assert controller.pause() is True
+    assert controller.pause() is False

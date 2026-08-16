@@ -112,8 +112,8 @@ class ListenController:
             vocabulary=list(self.config.vocabulary or []),
             translate=None)          # the queue does it, in batches
         self._segmenter = VadSegmenter(
-            vad_silence_ms=self.config.vad_silence_ms,
-            max_utterance_sec=self.config.max_utterance_sec)
+            vad_silence_ms=self.config.listen_silence_ms,
+            max_utterance_sec=self.config.listen_max_seconds)
         self._source = self._open_source(source, pids, device)
         self._source.start()
         self._hold_awake()
@@ -171,6 +171,11 @@ class ListenController:
                 got = False
                 for chunk in self._source.chunks():
                     got = True
+                    if getattr(self, "_paused", False):
+                        # Drained, not fed: the audio keeps flowing so the
+                        # device stays open, but a coffee break does not become
+                        # a paragraph of room noise.
+                        continue
                     self.recording.write(chunk)
                     for event in self._segmenter.feed(chunk):
                         if isinstance(event, SpeechEnd):
@@ -225,14 +230,25 @@ class ListenController:
     def _on_utterance(self, utterance) -> None:
         from backend.listen import Entry
         from backend.providers.llm import strip_fillers
-        from backend.punctuation import is_hallucination
+        from backend.punctuation import collapse_repetition, is_hallucination
 
         if is_hallucination(utterance.raw_text):
             log.info("丢掉一条静音幻觉：%r", utterance.raw_text[:40])
             return
+
+        # 铁律 1's failure mode, and it reached a real transcript: one entry
+        # carried 「既的」 repeated for 136 characters, and the translator
+        # faithfully rendered the whole loop into Chinese. Dictation has folded
+        # these since P2a; the listen path simply never called it.
+        #
+        # Confidence does not catch this — that entry scored -0.147, right in
+        # the middle of the healthy range — so the guard has to be structural.
+        source, removed = collapse_repetition(utterance.raw_text)
+        if removed:
+            log.warning("折叠了 %d 次复读：%d 字 → %d 字",
+                        removed, len(utterance.raw_text), len(source))
         entry = Entry(index=utterance.index, started_at=utterance.start_sec,
-                      source=utterance.raw_text,
-                      display=strip_fillers(utterance.raw_text),
+                      source=source, display=strip_fillers(source),
                       forced=utterance.forced, confidence=utterance.confidence)
         self.session.add(entry)
         if self.window is not None:
@@ -247,12 +263,22 @@ class ListenController:
 
     # -- ending ------------------------------------------------------------
 
-    def pause(self) -> None:
-        """Write both records without ending the meeting."""
-        if self._queue is not None:
-            self._queue.flush()
-        if self.session is not None:
-            self.session.pause()
+    def pause(self) -> bool:
+        """Pause or resume. Returns whether it is now paused.
+
+        Pausing writes both records — the author asked for that specifically —
+        and stops feeding the segmenter, so a break in the meeting does not
+        become thirty seconds of room noise in the transcript.
+        """
+        self._paused = not getattr(self, "_paused", False)
+        if self._paused:
+            if self._queue is not None:
+                self._queue.flush()
+            if self.session is not None:
+                self.session.pause()
+        elif self.session is not None:
+            self.session.resume()
+        return self._paused
 
     def stop(self, *, summarise: bool = True) -> None:
         self._stop.set()

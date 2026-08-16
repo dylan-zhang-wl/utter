@@ -133,6 +133,21 @@ class AppConfig(BaseModel):
     # 摆在原文旁边的，改错了抬眼就能看见，所以这里允许解释性翻译。
     translate_level: str = "fluent"
 
+    # 听记的分段。**不能沿用 vad_silence_ms=600 / max_utterance_sec=30**，
+    # 那是给"一段话说完了吗"用的。2026-08-16 拿一场真实的英文演讲实测：
+    # 讲者根本不停 600ms，于是每一条都撞到 30 秒上限——
+    #
+    #   10 条记录，每条 380–495 字，间隔 26–30 秒
+    #
+    # 也就是说**每 30 秒才出一次字，再加 3 秒转录**。作者的原话是
+    # "哪怕延迟 2 秒都没做到"，完全正确。
+    #
+    # 500ms 问的是"这句说完了吗"，12 秒封顶保证不会等太久。代价是每段音频
+    # 的固定开销摊得更薄（实测短音频约 375ms/音频秒 vs 长音频 100ms），
+    # 占空比升到三四成——余量仍然够，而且翻译本来就是并行的。
+    listen_silence_ms: int = 500
+    listen_max_seconds: int = 12
+
     # Where to cut, measured on the author's own dictation 2026-08-11. The
     # numbers matter more than they look:
     #

@@ -308,6 +308,7 @@ def _run(log) -> int:
             menu._start_listening(kind, device=device)
 
     window.on_listen_toggle = toggle_meeting
+    window.on_listen_pause = listen.pause
     # Dictation refuses the microphone while a meeting is using it — not a
     # lock, but an honest refusal: in a room the meeting microphone hears the
     # author anyway, so a dictated note would land in the meeting transcript.

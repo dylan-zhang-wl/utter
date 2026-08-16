@@ -185,7 +185,7 @@ days. It cost them.
 ## Status
 
 Personal software, used daily by its author, published because the lessons are
-worth more shared than kept. 808 tests. Speak mode is complete; Listen mode is
+worth more shared than kept. 811 tests. Speak mode is complete; Listen mode is
 designed and not implemented; the bundle is not distributable to other machines
 yet (Apple notarisation needs a paid developer account).
 

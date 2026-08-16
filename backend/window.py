@@ -64,8 +64,11 @@ class MainWindow:
         self.listen_pane = None
         self._pages = None
         self._tabs = None
-        #: Set by the app: start or stop a meeting from the 听记 page.
+        #: Set by the app: start/stop and pause/resume from the 听记 page.
         self.on_listen_toggle = None
+        self.on_listen_pause = None
+        #: Where the window was before it became a bookmark.
+        self._normal_frame = None
 
     def menu_target(self):
         """An object responding to `openWindow:`, for the ⌘, menu item.
@@ -148,9 +151,47 @@ class MainWindow:
         if self.listen_pane:
             self.listen_pane.set_clock(text)
 
+    #: The bookmark: narrow, tall, and parked at the top right while a meeting
+    #: runs. The author's use is watching subtitles beside something else, so
+    #: the full-width settings window is the wrong shape for the only moment it
+    #: is actually being read.
+    BOOKMARK_SIZE = (360, 560)
+    BOOKMARK_MARGIN = 24
+
     def set_listening(self, running: bool):
         if self.listen_pane:
             self.listen_pane.set_running(running)
+        _on_main(lambda: self._set_bookmark(running))
+
+    def _set_bookmark(self, on: bool) -> None:
+        """Shrink to a bookmark while recording; restore afterwards."""
+        import AppKit
+
+        if self._window is None:
+            return
+        try:
+            if on:
+                if self._normal_frame is None:
+                    self._normal_frame = self._window.frame()
+                screen = (self._window.screen() or AppKit.NSScreen.mainScreen()
+                          ).visibleFrame()
+                width, height = self.BOOKMARK_SIZE
+                frame = AppKit.NSMakeRect(
+                    screen.origin.x + screen.size.width - width - self.BOOKMARK_MARGIN,
+                    screen.origin.y + screen.size.height - height - self.BOOKMARK_MARGIN,
+                    width, height)
+                self._window.setFrame_display_animate_(frame, True, True)
+                if self._tabs is not None:
+                    self._tabs.setHidden_(True)   # one page while recording
+            else:
+                if self._tabs is not None:
+                    self._tabs.setHidden_(False)
+                if self._normal_frame is not None:
+                    self._window.setFrame_display_animate_(
+                        self._normal_frame, True, True)
+                    self._normal_frame = None
+        except Exception:
+            log.warning("切换书签形态出错", exc_info=True)
 
     def set_preparing(self, preparing: bool):
         if self.listen_pane:
@@ -405,6 +446,8 @@ class MainWindow:
             if self.listen_pane is None:
                 self.listen_pane = TranscriptPane(
                     on_toggle=lambda: (self.on_listen_toggle or (lambda: None))())
+                self.listen_pane.on_pause = lambda: (
+                    self.on_listen_pause() if self.on_listen_pause else False)
             listen_page = self.listen_pane.view()
 
             self._pages = {"listen": listen_page, "settings": settings_page}

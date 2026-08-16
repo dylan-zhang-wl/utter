@@ -62,6 +62,8 @@ class TranscriptPane:
         self._source = None
         self._choices = []
         self._button = None
+        self._pause = None
+        self.on_pause = None
         self._delegate = None
         #: entry index -> the range in the text holding its translation
         self._ranges: dict[int, tuple[int, int]] = {}
@@ -289,6 +291,11 @@ class TranscriptPane:
             1, AppKit.NSLayoutConstraintOrientationHorizontal)
         row.addArrangedSubview_(spacer)
 
+        self._pause = AppKit.NSButton.buttonWithTitle_target_action_(
+            "暂停", self._delegate, "pause:")
+        self._pause.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        row.addArrangedSubview_(self._pause)
+
         self._button = AppKit.NSButton.buttonWithTitle_target_action_(
             "开始听记", self._delegate, "toggle:")
         self._button.setBezelStyle_(AppKit.NSBezelStyleRounded)
@@ -307,6 +314,9 @@ class TranscriptPane:
         self._source.setHidden_(running)
         self._dot.setHidden_(not running)
         self._clock.setHidden_(not running)
+        if self._pause is not None:
+            self._pause.setHidden_(not running)
+            self._pause.setTitle_("暂停")
 
     def set_running(self, running: bool) -> None:
         _on_main(lambda: self._set_running(running))
@@ -390,6 +400,15 @@ class TranscriptPane:
             return TranscriptPane._delegate_class_cache
 
         class UtterTranscriptDelegate(AppKit.NSObject):
+            def pause_(self, sender):
+                try:
+                    owner = self.owner
+                    if owner.on_pause:
+                        paused = owner.on_pause()
+                        sender.setTitle_("继续" if paused else "暂停")
+                except Exception:
+                    log.warning("暂停/继续出错", exc_info=True)
+
             def toggle_(self, _s):
                 # Guarded for the reason in window.py: AppKit swallows whatever
                 # an action handler raises, so an unguarded failure here is a
