@@ -11,15 +11,18 @@ import pytest
 
 AppKit = pytest.importorskip("AppKit")
 
-from backend.listenwindow import ListenWindow  # noqa: E402
+from backend.listenwindow import TranscriptPane  # noqa: E402
 
 
 @pytest.fixture
 def window():
+    """The 听记 page as a view. It lives inside the main window now — the
+    application does two things, and starting the second from a right-click on
+    the menu bar was not where anyone would look for it."""
     AppKit.NSApplication.sharedApplication()
-    w = ListenWindow()
-    assert w._build(), "窗口没建起来"
-    return w
+    pane = TranscriptPane()
+    assert pane.view() is not None, "页面没建起来"
+    return pane
 
 
 def body(window) -> str:
@@ -111,20 +114,62 @@ def test_the_transcript_is_selectable_but_not_editable(window):
     assert not window._text.isEditable()
 
 
-def test_long_lines_wrap_instead_of_running_off_the_edge(window):
-    """Measured, because the first build did not: the text view came out twice
-    the width of its clip view and every long sentence ran off the right."""
-    window.append(0, "Venuti argues that fluency is itself an ideology, "
-                     "one that makes the translator invisible entirely.")
-    window._window.contentView().layoutSubtreeIfNeeded()
+def test_long_lines_wrap_instead_of_running_off_the_edge():
+    """Measured inside a real window, because that is the only place the pane
+    has a width. The first build laid out against a 1080pt container inside a
+    560pt window and every long sentence ran off the right edge."""
+    import types
 
+    from backend.config import AppConfig
+    from backend.window import MainWindow
+
+    AppKit.NSApplication.sharedApplication()
+    daemon = types.SimpleNamespace(
+        config=AppConfig(), stt=None, running=True, polish=None,
+        scratchpad=types.SimpleNamespace(
+            archive=types.SimpleNamespace(path="/tmp/x")))
+    daemon._save_config = lambda: None
+
+    main = MainWindow(daemon)
+    assert main._build()
+    main.append(0, "Venuti argues that fluency is itself an ideology, "
+                   "one that makes the translator invisible entirely.")
+    main._window.contentView().layoutSubtreeIfNeeded()
+
+    text = main.listen_pane._text
+    manager, container = text.layoutManager(), text.textContainer()
     # usedRect is lazy: without forcing layout it reports 0x0 and the test
     # passes for the wrong reason.
-    manager = window._text.layoutManager()
-    container = window._text.textContainer()
     manager.ensureLayoutForTextContainer_(container)
     used = manager.usedRectForTextContainer_(container)
-    clip = window._text.enclosingScrollView().contentView().frame().size.width
+    clip = text.enclosingScrollView().contentView().frame().size.width
 
-    assert used.size.width <= clip, f"文字宽 {used.size.width} 超过了可视宽 {clip}"
+    assert clip > 100, "窗口里应该有真实宽度"
+    assert used.size.width <= clip, f"文字宽 {used.size.width} 超过可视宽 {clip}"
     assert used.size.height > 30, "没换行的话高度会很小"
+
+
+def test_the_window_has_both_pages_and_starts_on_listening():
+    """The application does two things; the window should say so."""
+    import types
+
+    from backend.config import AppConfig
+    from backend.window import MainWindow
+
+    AppKit.NSApplication.sharedApplication()
+    daemon = types.SimpleNamespace(
+        config=AppConfig(), stt=None, running=True, polish=None,
+        scratchpad=types.SimpleNamespace(
+            archive=types.SimpleNamespace(path="/tmp/x")))
+    daemon._save_config = lambda: None
+
+    main = MainWindow(daemon)
+    assert main._build()
+
+    assert set(main._pages) == {"listen", "settings"}
+    assert not main._pages["listen"].isHidden(), "默认应该停在听记页"
+    assert main._pages["settings"].isHidden()
+
+    main._select_page("settings")
+    assert main._pages["listen"].isHidden()
+    assert not main._pages["settings"].isHidden()

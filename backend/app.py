@@ -294,13 +294,19 @@ def _run(log) -> int:
     window = MainWindow(daemon, on_quit=daemon.stop)
     menu = MenuBar(daemon, on_quit=daemon.stop, window=window)
 
-    # 听记. The window is built lazily by the controller when a meeting starts.
+    # 听记 lives on a page of the main window, not in a window of its own.
     from backend.listencontroller import ListenController
-    from backend.listenwindow import ListenWindow
 
-    listen = ListenController(config, window=ListenWindow())
-    listen.window.on_stop = lambda: menu._stop_listening()
+    listen = ListenController(config, window=window)
     menu.listen = listen
+
+    def toggle_meeting():
+        if listen.running:
+            menu._stop_listening()
+        else:
+            menu._start_listening(window.listen_pane.source_kind)
+
+    window.on_listen_toggle = toggle_meeting
     # Dictation refuses the microphone while a meeting is using it — not a
     # lock, but an honest refusal: in a room the meeting microphone hears the
     # author anyway, so a dictated note would land in the meeting transcript.

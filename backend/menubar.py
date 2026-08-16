@@ -282,8 +282,11 @@ class MenuBar:
         listen = getattr(self, "listen", None)
         if listen is None or listen.running:
             return
-        if not listen.start(source=source):
+        started = listen.start(source=source)
+        if not started:
             self._notify("听记没能开始", listen.error or "原因不明，看日志")
+        if getattr(listen, "window", None) is not None:
+            listen.window.set_listening(started)
         self._rebuild()
 
     def _stop_listening(self) -> None:
@@ -294,6 +297,8 @@ class MenuBar:
 
         def finish():
             listen.stop()
+            if getattr(listen, "window", None) is not None:
+                listen.window.set_listening(False)
             self.set_status(None)
             self._rebuild()
 

@@ -58,6 +58,14 @@ class MainWindow:
         self._delegate = None
         self._timer = None
         self._warnings = []
+        #: The 听记 page. The application does two things now, and starting the
+        #: second from a right-click on the menu bar is not where anyone would
+        #: look — so both live here, one segmented control apart.
+        self.listen_pane = None
+        self._pages = None
+        self._tabs = None
+        #: Set by the app: start or stop a meeting from the 听记 page.
+        self.on_listen_toggle = None
 
     def menu_target(self):
         """An object responding to `openWindow:`, for the ⌘, menu item.
@@ -84,7 +92,22 @@ class MainWindow:
             AppKit.NSApp().setActivationPolicy_(
                 AppKit.NSApplicationActivationPolicyRegular)
             self._window.makeKeyAndOrderFront_(None)
-            AppKit.NSApp().activateIgnoringOtherApps_(True)
+            # Activate on the NEXT run-loop turn, not this one.
+            #
+            # setActivationPolicy_ from Accessory to Regular does not take
+            # effect until the run loop turns, so activating immediately after
+            # it lands while the app is still an accessory — and an accessory
+            # app is not "active", which means the main menu never receives key
+            # equivalents. The window appeared and ⌘W did nothing until the
+            # user clicked on it. Measured: frontmost=false with a window
+            # visible; frontmost=true and ⌘W working once activation happened
+            # a beat later.
+            def activate():
+                AppKit.NSApp().activateIgnoringOtherApps_(True)
+                self._window.makeKeyAndOrderFront_(None)
+
+            AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+                0.0, False, lambda _t: activate())
             self._tick(True)
             # A window that is ordered front and still not visible is the
             # failure this line exists to catch; it cost a session once.
@@ -93,18 +116,59 @@ class MainWindow:
 
         _on_main(run)
 
+    def _select_page(self, name: str) -> None:
+        if not self._pages:
+            return
+        for key, page in self._pages.items():
+            page.setHidden_(key != name)
+
+    def show_listen(self) -> None:
+        """Bring the window up on the 听记 page."""
+        def run():
+            if self._window is None and not self._build():
+                return
+            if self._tabs is not None:
+                self._tabs.setSelectedSegment_(0)
+            self._select_page("listen")
+
+        _on_main(run)
+        self.show()
+
+    # -- the controller talks to the pane through us -----------------------
+
+    def append(self, index, source, translation=None):
+        if self.listen_pane:
+            self.listen_pane.append(index, source, translation)
+
+    def translated(self, index, text):
+        if self.listen_pane:
+            self.listen_pane.translated(index, text)
+
+    def set_clock(self, text):
+        if self.listen_pane:
+            self.listen_pane.set_clock(text)
+
+    def set_listening(self, running: bool):
+        if self.listen_pane:
+            self.listen_pane.set_running(running)
+
     # -- build ------------------------------------------------------------
 
-    def _delegate_class(self):
-        """The window's target for every control, built once.
+    #: Registered once per process. Objective-C has one flat class namespace,
+    #: so a second MainWindow raised "overriding existing Objective-C class"
+    #: and _build() swallowed it and returned False — a window that silently
+    #: refuses to open. The delegate therefore holds its owner rather than
+    #: closing over it.
+    _delegate_class_cache = None
 
-        Objective-C has a single flat class namespace for the process, so this
-        name must not collide with the menu bar's — a duplicate silently fails
-        to register and takes the whole window with it.
-        """
+    def _delegate_class(self):
+        """The window's target for every control, registered once."""
+        if MainWindow._delegate_class_cache is not None:
+            return MainWindow._delegate_class_cache
+
         import AppKit
 
-        outer = self
+        outer = self  # rebound below for later instances
 
         class UtterWindowDelegate(AppKit.NSObject):
             def windowShouldClose_(self, _s):
@@ -153,6 +217,10 @@ class MainWindow:
             def editVocabulary_(self, _s):
                 outer._open_config()
 
+            def pickPage_(self, sender):
+                outer._select_page(
+                    "listen" if sender.selectedSegment() == 0 else "settings")
+
             def openWindow_(self, _s):
                 outer.show()
 
@@ -172,6 +240,7 @@ class MainWindow:
                     outer.on_quit()
                 AppKit.NSApp().terminate_(None)
 
+        MainWindow._delegate_class_cache = UtterWindowDelegate
         return UtterWindowDelegate
 
     def _build(self) -> bool:
@@ -220,10 +289,7 @@ class MainWindow:
             column.setTranslatesAutoresizingMaskIntoConstraints_(False)
             blur.addSubview_(column)
             AppKit.NSLayoutConstraint.activateConstraints_([
-                column.topAnchor().constraintEqualToAnchor_constant_(blur.topAnchor(), 34),
-                column.leadingAnchor().constraintEqualToAnchor_constant_(blur.leadingAnchor(), PAD),
-                column.trailingAnchor().constraintEqualToAnchor_constant_(blur.trailingAnchor(), -PAD),
-                column.bottomAnchor().constraintEqualToAnchor_constant_(blur.bottomAnchor(), -PAD),
+                column.widthAnchor().constraintEqualToConstant_(WIDTH - PAD * 2),
             ])
 
             def stacked(view):
@@ -266,7 +332,58 @@ class MainWindow:
 
             stacked(self._footer())
 
-            window.setContentSize_(AppKit.NSMakeSize(WIDTH, column.fittingSize().height + 54))
+            # --- two pages, one window -----------------------------------
+            settings_page = AppKit.NSView.alloc().init()
+            settings_page.setTranslatesAutoresizingMaskIntoConstraints_(False)
+            column.removeFromSuperview()
+            settings_page.addSubview_(column)
+            AppKit.NSLayoutConstraint.activateConstraints_([
+                column.topAnchor().constraintEqualToAnchor_(settings_page.topAnchor()),
+                column.leadingAnchor().constraintEqualToAnchor_(
+                    settings_page.leadingAnchor()),
+                column.trailingAnchor().constraintEqualToAnchor_(
+                    settings_page.trailingAnchor()),
+            ])
+
+            from backend.listenwindow import TranscriptPane
+
+            if self.listen_pane is None:
+                self.listen_pane = TranscriptPane(
+                    on_toggle=lambda: (self.on_listen_toggle or (lambda: None))())
+            listen_page = self.listen_pane.view()
+
+            self._pages = {"listen": listen_page, "settings": settings_page}
+            for page in self._pages.values():
+                page.setTranslatesAutoresizingMaskIntoConstraints_(False)
+                blur.addSubview_(page)
+                AppKit.NSLayoutConstraint.activateConstraints_([
+                    page.topAnchor().constraintEqualToAnchor_constant_(
+                        blur.topAnchor(), 64),
+                    page.leadingAnchor().constraintEqualToAnchor_(blur.leadingAnchor()),
+                    page.trailingAnchor().constraintEqualToAnchor_(blur.trailingAnchor()),
+                    page.bottomAnchor().constraintEqualToAnchor_constant_(
+                        blur.bottomAnchor(), -PAD),
+                ])
+
+            tabs = AppKit.NSSegmentedControl.alloc().init()
+            tabs.setSegmentCount_(2)
+            tabs.setLabel_forSegment_("听记", 0)
+            tabs.setLabel_forSegment_("设置", 1)
+            tabs.setSegmentStyle_(AppKit.NSSegmentStyleTexturedRounded)
+            tabs.setTarget_(self._delegate)
+            tabs.setAction_("pickPage:")
+            tabs.setTranslatesAutoresizingMaskIntoConstraints_(False)
+            blur.addSubview_(tabs)
+            AppKit.NSLayoutConstraint.activateConstraints_([
+                tabs.centerXAnchor().constraintEqualToAnchor_(blur.centerXAnchor()),
+                tabs.topAnchor().constraintEqualToAnchor_constant_(blur.topAnchor(), 28),
+                tabs.widthAnchor().constraintEqualToConstant_(180),
+            ])
+            self._tabs = tabs
+            tabs.setSelectedSegment_(0)
+            self._select_page("listen")
+
+            window.setContentSize_(AppKit.NSMakeSize(WIDTH, 620))
             window.center()
             # Reopen where it was left. center() above is the first-run
             # position; after that AppKit restores the saved frame over it.

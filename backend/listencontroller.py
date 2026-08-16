@@ -73,7 +73,8 @@ class ListenController:
                                         name="utter-listen")
         self._thread.start()
         if self.window is not None:
-            self.window.show()
+            show = getattr(self.window, "show_listen", None) or self.window.show
+            show()
         return True
 
     def _build(self, *, source, pids, title) -> None:
