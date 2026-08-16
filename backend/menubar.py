@@ -272,7 +272,7 @@ class MenuBar:
         except Exception:  # pragma: no cover
             log.warning("could not set the menu bar symbol", exc_info=True)
 
-    def _start_listening(self, source: str) -> None:
+    def _start_listening(self, source: str, device=None) -> None:
         """Begin a meeting from the menu bar.
 
         Errors are shown rather than logged: the author pressed a menu item and
@@ -282,12 +282,24 @@ class MenuBar:
         listen = getattr(self, "listen", None)
         if listen is None or listen.running:
             return
-        started = listen.start(source=source)
-        if not started:
-            self._notify("听记没能开始", listen.error or "原因不明，看日志")
-        if getattr(listen, "window", None) is not None:
-            listen.window.set_listening(started)
-        self._rebuild()
+        # Off the main thread. Starting loads the model and opens an audio
+        # device; on the interface thread that freezes the window for seconds,
+        # which is exactly what the author saw when the button "did nothing".
+        window = getattr(listen, "window", None)
+        if window is not None:
+            window.set_preparing(True)
+
+        def begin():
+            started = listen.start(source=source, device=device)
+            if not started:
+                self._notify("听记没能开始", listen.error or "原因不明，看日志")
+            if window is not None:
+                window.set_preparing(False)
+                window.set_listening(started)
+            self._rebuild()
+
+        import threading
+        threading.Thread(target=begin, daemon=True, name="utter-listen-start").start()
 
     def _stop_listening(self) -> None:
         listen = getattr(self, "listen", None)

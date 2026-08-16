@@ -304,7 +304,8 @@ def _run(log) -> int:
         if listen.running:
             menu._stop_listening()
         else:
-            menu._start_listening(window.listen_pane.source_kind)
+            kind, device = window.listen_pane.source
+            menu._start_listening(kind, device=device)
 
     window.on_listen_toggle = toggle_meeting
     # Dictation refuses the microphone while a meeting is using it — not a

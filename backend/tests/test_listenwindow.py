@@ -173,3 +173,85 @@ def test_the_window_has_both_pages_and_starts_on_listening():
     main._select_page("settings")
     assert main._pages["listen"].isHidden()
     assert not main._pages["settings"].isHidden()
+
+
+# --- the start button, which did nothing at all in the first build ---------------
+
+
+def _main_window():
+    import types
+
+    from backend.config import AppConfig
+    from backend.window import MainWindow
+
+    AppKit.NSApplication.sharedApplication()
+    daemon = types.SimpleNamespace(
+        config=AppConfig(), stt=None, running=True, polish=None,
+        scratchpad=types.SimpleNamespace(
+            archive=types.SimpleNamespace(path="/tmp/x")))
+    daemon._save_config = lambda: None
+    return MainWindow(daemon)
+
+
+def test_the_start_button_actually_fires():
+    """It did not. The action was registered as "toggle_" — the Python method
+    name — where Objective-C wants the selector "toggle:", so the button was
+    wired to something that did not exist and clicking it raised
+    "unrecognized selector" into the void. Everything else in this codebase
+    writes the colon; this one place did not.
+    """
+    window = _main_window()
+    fired = []
+    window.on_listen_toggle = lambda: fired.append(1)
+    assert window._build()
+
+    window.listen_pane._button.performClick_(None)
+
+    assert fired == [1], "开始按钮没有触发任何东西"
+
+
+def test_the_button_says_it_is_working_rather_than_looking_dead():
+    """Loading the model and opening a device takes seconds. A button that
+    still reads 开始听记 through all of it looks like a button that ignored
+    the click — which is how the author described it."""
+    window = _main_window()
+    assert window._build()
+    pane = window.listen_pane
+
+    pane.set_preparing(True)
+    assert "准备" in str(pane._button.title())
+    assert not pane._button.isEnabled()
+
+    pane.set_preparing(False)
+    pane.set_running(True)
+    assert "结束" in str(pane._button.title())
+    assert pane._button.isEnabled()
+
+
+def test_the_source_list_is_real_devices_not_invented_categories():
+    """The author's point: 「线下会议」/「线上会议」 is a category they have to
+    translate into a device. List what macOS actually reports, and nothing
+    that is not there."""
+    window = _main_window()
+    assert window._build()
+    pane = window.listen_pane
+
+    titles = [str(pane._source.itemTitleAtIndex_(i))
+              for i in range(pane._source.numberOfItems())]
+
+    assert titles, "一个音源都没列出来"
+    assert not any("线下会议" in t or "线上会议" in t for t in titles)
+    kind, _device = pane.source
+    assert kind in ("mic", "system")
+
+
+def test_every_listed_source_maps_to_something_real():
+    """No entry may exist that cannot be started."""
+    window = _main_window()
+    assert window._build()
+    pane = window.listen_pane
+
+    assert len(pane._choices) == pane._source.numberOfItems() or not pane._choices
+    for kind, device in pane._choices:
+        assert kind in ("mic", "system")
+        assert kind == "system" or isinstance(device, int)

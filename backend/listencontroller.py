@@ -55,12 +55,13 @@ class ListenController:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def start(self, *, source: str = "mic", pids=None, title: str = "") -> bool:
+    def start(self, *, source: str = "mic", pids=None, device=None,
+              title: str = "") -> bool:
         if self.running:
             return True
         self.error = None
         try:
-            self._build(source=source, pids=pids, title=title)
+            self._build(source=source, pids=pids, device=device, title=title)
         except Exception as exc:
             self.error = str(exc)
             log.warning("听记起不来：%s", exc, exc_info=True)
@@ -77,7 +78,7 @@ class ListenController:
             show()
         return True
 
-    def _build(self, *, source, pids, title) -> None:
+    def _build(self, *, source, pids, device, title) -> None:
         from backend.cli import build_complete, build_translate
         from backend.listen import ListenSession
         from backend.pipeline import listen_pipeline
@@ -113,18 +114,19 @@ class ListenController:
         self._segmenter = VadSegmenter(
             vad_silence_ms=self.config.vad_silence_ms,
             max_utterance_sec=self.config.max_utterance_sec)
-        self._source = self._open_source(source, pids)
+        self._source = self._open_source(source, pids, device)
         self._source.start()
         self._hold_awake()
 
-    def _open_source(self, source: str, pids):
+    def _open_source(self, source: str, pids, device=None):
         from backend.audio_source import MicSource
 
         if source == "system":
             from backend.system_audio import SystemAudioSource
 
             return SystemAudioSource(pids=list(pids or []))
-        return MicSource(device_index=self.config.input_device)
+        index = device if device is not None else self.config.input_device
+        return MicSource(device_index=index)
 
     def _hold_awake(self) -> None:
         """Keep the machine working; let the screen go dark.

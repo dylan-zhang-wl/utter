@@ -60,6 +60,7 @@ class TranscriptPane:
         self._clock = None
         self._dot = None
         self._source = None
+        self._choices = []
         self._button = None
         self._delegate = None
         #: entry index -> the range in the text holding its translation
@@ -221,9 +222,16 @@ class TranscriptPane:
             font = AppKit.NSFont.systemFontOfSize_(14)
             colour = AppKit.NSColor.labelColor()
         else:
-            font = AppKit.NSFont.systemFontOfSize_(14)
+            # Songti for the Chinese. One typeface change does more for the
+            # 书卷气 the author asked for than any amount of ornament, and it
+            # also separates the translation from the transcript at a glance
+            # without a second colour.
+            font = (AppKit.NSFont.fontWithName_size_("Songti SC", 15)
+                    or AppKit.NSFont.fontWithName_size_("STSong", 15)
+                    or AppKit.NSFont.systemFontOfSize_(14))
             colour = (AppKit.NSColor.tertiaryLabelColor() if faded
                       else AppKit.NSColor.secondaryLabelColor())
+            paragraph.setLineSpacing_(5.0)   # serif needs more air
 
         return AppKit.NSAttributedString.alloc().initWithString_attributes_(
             text, {
@@ -286,14 +294,16 @@ class TranscriptPane:
         row.setSpacing_(10)
 
         self._source = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            AppKit.NSMakeRect(0, 0, 190, 25), False)
-        for title in ("线下会议（麦克风）", "线上会议（系统音频）"):
-            self._source.addItemWithTitle_(title)
+            AppKit.NSMakeRect(0, 0, 230, 25), False)
         row.addArrangedSubview_(self._source)
+        self.refresh_sources()
 
-        self._dot = AppKit.NSTextField.labelWithString_("●")
-        self._dot.setTextColor_(AppKit.NSColor.systemRedColor())
-        self._dot.setFont_(AppKit.NSFont.systemFontOfSize_(10))
+        # 朱砂, not the system red: it is the colour of a seal, and it is the
+        # one spot of colour in the window.
+        self._dot = AppKit.NSTextField.labelWithString_("■")
+        self._dot.setTextColor_(AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(
+            0.78, 0.20, 0.16, 1.0))
+        self._dot.setFont_(AppKit.NSFont.systemFontOfSize_(9))
         row.addArrangedSubview_(self._dot)
 
         self._clock = AppKit.NSTextField.labelWithString_("00:00")
@@ -309,7 +319,7 @@ class TranscriptPane:
         row.addArrangedSubview_(spacer)
 
         self._button = AppKit.NSButton.buttonWithTitle_target_action_(
-            "开始听记", self._delegate, "toggle_")
+            "开始听记", self._delegate, "toggle:")
         self._button.setBezelStyle_(AppKit.NSBezelStyleRounded)
         self._button.setKeyEquivalent_("\r")     # Return starts a meeting
         row.addArrangedSubview_(self._button)
@@ -330,12 +340,67 @@ class TranscriptPane:
     def set_running(self, running: bool) -> None:
         _on_main(lambda: self._set_running(running))
 
+    def set_preparing(self, preparing: bool) -> None:
+        """Loading the model and opening a device takes seconds. Say so.
+
+        A button that stays on 开始听记 while several seconds pass reads as a
+        button that did nothing — which is exactly how the author described it.
+        """
+        def run():
+            if self._button is None:
+                return
+            self._button.setEnabled_(not preparing)
+            if preparing:
+                self._button.setTitle_("正在准备…")
+
+        _on_main(run)
+
+    def refresh_sources(self) -> None:
+        """List what this machine actually has, right now.
+
+        The first version offered 「线下会议（麦克风）」 and 「线上会议（系统音频）」,
+        which is a category the user has to translate into a device. The author
+        asked for the real thing instead: the inputs macOS currently reports,
+        plus system audio when this machine can do it — and nothing that is not
+        actually there. Unplug the headphones and the next open shows the
+        change.
+        """
+        from backend import audio_source
+        from backend.system_audio import SystemAudioSource
+
+        self._choices = []
+        self._source.removeAllItems()
+
+        try:
+            audio_source.refresh_devices()   # PortAudio enumerates once at init
+            shared = audio_source.shared_with_output()
+            for device in audio_source.list_devices():
+                mark = "  ⚠ 也是扬声器" if device.name == shared else ""
+                self._source.addItemWithTitle_(f"{device.name}{mark}")
+                self._choices.append(("mic", device.index))
+        except Exception:
+            log.warning("列不出输入设备", exc_info=True)
+
+        ok, _why = SystemAudioSource.available()
+        if ok:
+            self._source.addItemWithTitle_("这台电脑正在播的声音")
+            self._choices.append(("system", None))
+
+        if not self._choices:
+            self._source.addItemWithTitle_("找不到可用的音频输入")
+            self._source.setEnabled_(False)
+
+    @property
+    def source(self) -> tuple[str, object]:
+        """(kind, device index) for whatever is selected."""
+        try:
+            return self._choices[self._source.indexOfSelectedItem()]
+        except Exception:
+            return ("mic", None)
+
     @property
     def source_kind(self) -> str:
-        try:
-            return "system" if self._source.indexOfSelectedItem() == 1 else "mic"
-        except Exception:
-            return "mic"
+        return self.source[0]
 
     def clear(self) -> None:
         def run():
@@ -393,6 +458,19 @@ class TranscriptPane:
         container = text.textContainer()
         container.setContainerSize_(AppKit.NSMakeSize(WIDTH, huge))
         container.setWidthTracksTextView_(True)
+
+        # A sheet of paper, not a void. Warm in light mode, barely-there in
+        # dark: the point is that the transcript reads as a page rather than as
+        # a terminal, which is what "书签" was asking for.
+        paper = AppKit.NSBox.alloc().init()
+        paper.setBoxType_(AppKit.NSBoxCustom)
+        paper.setTitlePosition_(AppKit.NSNoTitle)
+        paper.setCornerRadius_(8.0)
+        paper.setBorderWidth_(0.0)
+        paper.setFillColor_(AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(
+            0.99, 0.98, 0.95, 0.55))
+        paper.setContentViewMargins_(AppKit.NSMakeSize(0, 0))
+        self._paper = paper
 
         scroll.setDocumentView_(text)
         # After setDocumentView_, not before: measured, the text view came out
