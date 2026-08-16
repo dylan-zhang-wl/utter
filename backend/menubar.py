@@ -44,6 +44,19 @@ class MenuBar:
             # namespace across the process, so a second `_Delegate` anywhere
             # fails to register and takes its whole window with it.
             class UtterMenuDelegate(AppKit.NSObject):
+                def startListening_(self, _sender):
+                    outer._start_listening("mic")
+
+                def startListeningSystem_(self, _sender):
+                    outer._start_listening("system")
+
+                def stopListening_(self, _sender):
+                    outer._stop_listening()
+
+                def showListening_(self, _sender):
+                    if getattr(outer, "listen", None) and outer.listen.window:
+                        outer.listen.window.show()
+
                 def openWindow_(self, _sender):
                     if outer.window is not None:
                         outer.window.show()
@@ -259,6 +272,34 @@ class MenuBar:
         except Exception:  # pragma: no cover
             log.warning("could not set the menu bar symbol", exc_info=True)
 
+    def _start_listening(self, source: str) -> None:
+        """Begin a meeting from the menu bar.
+
+        Errors are shown rather than logged: the author pressed a menu item and
+        is waiting for a window, so a failure that only reaches the log reads
+        as the application ignoring them.
+        """
+        listen = getattr(self, "listen", None)
+        if listen is None or listen.running:
+            return
+        if not listen.start(source=source):
+            self._notify("听记没能开始", listen.error or "原因不明，看日志")
+        self._rebuild()
+
+    def _stop_listening(self) -> None:
+        listen = getattr(self, "listen", None)
+        if listen is None or not listen.running:
+            return
+        self.set_status("正在整理纪要…")
+
+        def finish():
+            listen.stop()
+            self.set_status(None)
+            self._rebuild()
+
+        import threading
+        threading.Thread(target=finish, daemon=True, name="utter-listen-stop").start()
+
     def _warnings(self, config):
         """Shared with the settings window, so the two cannot disagree."""
         from backend.health import warnings_for
@@ -315,6 +356,15 @@ class MenuBar:
                 menu.addItem_(AppKit.NSMenuItem.separatorItem())
             for note in self._warnings(self.daemon.config):
                 add(note.short, "openWindow:")
+            listen = getattr(self, "listen", None)
+            if listen is not None:
+                if listen.running:
+                    add("结束听记", "stopListening:")
+                    add("听记窗口…", "showListening:")
+                else:
+                    add("开始听记（麦克风）", "startListening:")
+                    add("开始听记（系统音频）", "startListeningSystem:")
+                menu.addItem_(AppKit.NSMenuItem.separatorItem())
             add("设置…", "openWindow:")
             menu.addItem_(AppKit.NSMenuItem.separatorItem())
             add("退出 Utter", "quit:")

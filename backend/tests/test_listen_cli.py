@@ -238,3 +238,67 @@ def test_a_recording_left_by_a_crash_is_swept_at_startup(monkeypatch):
 
     assert not old.path.exists(), "上次崩溃留下的录音应该被清掉"
     assert "没删干净" in output
+
+
+# --- the menu bar and the microphone guard --------------------------------------
+
+
+def test_the_menu_offers_to_start_and_then_to_stop(monkeypatch):
+    """The one control surface most people will ever use."""
+    import types
+
+    import AppKit
+
+    AppKit.NSApplication.sharedApplication()
+    from backend.config import AppConfig
+    from backend.menubar import MenuBar
+
+    daemon = types.SimpleNamespace(config=AppConfig(), polish=None, running=True)
+    menu = MenuBar(daemon)
+
+    class Listen:
+        running = False
+        window = None
+
+    menu.listen = Listen()
+    menu._rebuild_now()
+    titles = [str(menu._menu.itemAtIndex_(i).title())
+              for i in range(menu._menu.numberOfItems())]
+    assert any("开始听记" in t for t in titles)
+
+    Listen.running = True
+    menu._rebuild_now()
+    titles = [str(menu._menu.itemAtIndex_(i).title())
+              for i in range(menu._menu.numberOfItems())]
+    assert any("结束听记" in t for t in titles)
+    assert not any("开始听记" in t for t in titles), "开着的时候不该还提供开始"
+
+
+def test_dictation_refuses_the_microphone_while_a_meeting_has_it():
+    """Not a lock — macOS lets two streams share an input. The reason is that
+    the room microphone hears the author too, so a dictated note would land in
+    the meeting transcript anyway. Refusing out loud beats doing it silently."""
+    from backend.tests.test_daemon import FakeMic, build
+
+    mic = FakeMic()
+    d = build(mic=mic)
+    d.listening_on_microphone = lambda: True
+
+    d.begin_utterance()
+
+    assert mic.started == 0, "听记在用麦克风时不该再开一次"
+    assert d._queue.empty()
+
+
+def test_dictation_is_unaffected_when_the_meeting_uses_system_audio():
+    """An online meeting takes system audio, so the two genuinely do not
+    collide and dictation must keep working."""
+    from backend.tests.test_daemon import FakeMic, build
+
+    mic = FakeMic()
+    d = build(mic=mic)
+    d.listening_on_microphone = lambda: False
+
+    d.begin_utterance()
+
+    assert mic.started == 1

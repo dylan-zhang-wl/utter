@@ -293,6 +293,19 @@ def _run(log) -> int:
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
     window = MainWindow(daemon, on_quit=daemon.stop)
     menu = MenuBar(daemon, on_quit=daemon.stop, window=window)
+
+    # 听记. The window is built lazily by the controller when a meeting starts.
+    from backend.listencontroller import ListenController
+    from backend.listenwindow import ListenWindow
+
+    listen = ListenController(config, window=ListenWindow())
+    listen.window.on_stop = lambda: menu._stop_listening()
+    menu.listen = listen
+    # Dictation refuses the microphone while a meeting is using it — not a
+    # lock, but an honest refusal: in a room the meeting microphone hears the
+    # author anyway, so a dictated note would land in the meeting transcript.
+    daemon.listening_on_microphone = lambda: listen.uses_microphone
+
     menu.install()
 
     # An LSUIElement app draws no menu bar, so it is easy to think it needs no

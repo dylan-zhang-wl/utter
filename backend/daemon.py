@@ -461,9 +461,25 @@ class DictationDaemon:
         else:
             self.end_utterance(at=event.at)
 
+    #: Set by the listen controller while a meeting is being recorded from the
+    #: microphone. Not a lock — macOS lets two streams share an input — but the
+    #: room microphone hears the author too, so anything dictated during an
+    #: in-person meeting lands in the meeting transcript anyway. Refusing
+    #: explicitly is the honest version of a thing that cannot work (铁律 13's
+    #: principle: a clear failure beats a silent one).
+    listening_on_microphone = None
+
     def begin_utterance(self, at: float | None = None, stream: bool | None = None) -> None:
         if self._mic is not None:
             return  # key repeat, or a second press before the first was released
+
+        if self.listening_on_microphone is not None and self.listening_on_microphone():
+            log.info("听记正在用麦克风，这次口述不录")
+            if self.overlay is not None:
+                self.overlay.set_state("error", "麦克风正在用于听记")
+                time.sleep(0.9)
+                self.overlay.hide()
+            return
 
         self._pressed_at = at if at is not None else time.perf_counter()
         # `stream` says whether the gesture supports it; the config says
