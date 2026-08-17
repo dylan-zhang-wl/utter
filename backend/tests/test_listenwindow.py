@@ -579,3 +579,24 @@ def test_the_bookmark_reopens_at_the_size_it_was_left():
     again = window._window.frame().size
     assert abs(again.width - 480) < 1, f"回到了 {again.width:.0f}pt，没记住"
     assert abs(again.height - 700) < 1
+
+
+def test_a_translation_still_lands_correctly_after_a_redraw():
+    """Changing the size rebuilds every offset. Translations in flight at that
+    moment carry indices into the old layout — which is how Chinese ends up
+    under the wrong English, silently, because both still look like sentences."""
+    window = _main_window()
+    assert window._build()
+    pane = window.listen_pane
+    pane.append(0, "First sentence")
+    pane.append(1, "Second sentence")
+    pane.append(2, "Third sentence")
+    pane.translated(0, "第一句")
+
+    pane.set_appearance(font_size=19)      # everything shifts
+    pane.translated(1, "第二句")            # was already in flight
+
+    text = body(pane)
+    assert text.index("Second sentence") < text.index("第二句") < text.index("Third sentence")
+    assert text.index("First sentence") < text.index("第一句") < text.index("Second sentence")
+    assert text.count("…") == 1, "只剩第三句还没译"
