@@ -378,3 +378,204 @@ def test_translation_waits_for_at_most_one_more_sentence():
     config = AppConfig()
     assert config.translate_batch == 2
     assert config.translate_wait_seconds <= 3.0
+
+
+# --- the type controls ----------------------------------------------------------
+
+
+def test_changing_the_size_redraws_what_is_already_on_screen():
+    """Applying a new size only to what arrives next would leave the meeting in
+    two sizes, which is worse than not offering the control at all."""
+    window = _main_window()
+    assert window._build()
+    pane = window.listen_pane
+    pane.append(0, "First sentence", "第一句")
+    pane.append(1, "Second sentence", "第二句")
+
+    pane.set_appearance(font_size=20)
+
+    text = body(pane)
+    assert "First sentence" in text and "第二句" in text, "重绘把内容弄丢了"
+    storage = pane._text.textStorage()
+    font = storage.attribute_atIndex_effectiveRange_(
+        AppKit.NSFontAttributeName, 0, None)[0]
+    assert abs(font.pointSize() - 20) < 0.01, "最早那句还是旧字号"
+
+
+def test_the_size_has_bounds():
+    """Held-down keys and stray clicks should not produce a 2pt transcript."""
+    window = _main_window()
+    assert window._build()
+    pane = window.listen_pane
+
+    for _ in range(40):
+        pane.set_appearance(font_size=pane.font_size - 1)
+    assert pane.font_size >= 10
+    for _ in range(40):
+        pane.set_appearance(font_size=pane.font_size + 1)
+    assert pane.font_size <= 28
+
+
+def test_high_contrast_darkens_the_translation_and_ticks_the_menu():
+    window = _main_window()
+    assert window._build()
+    pane = window.listen_pane
+    pane.append(0, "English", "中文")
+
+    def chinese_colour():
+        storage = pane._text.textStorage()
+        at = str(storage.string()).index("中文")
+        return storage.attribute_atIndex_effectiveRange_(
+            AppKit.NSForegroundColorAttributeName, at, None)[0]
+
+    faint = chinese_colour()
+    pane.set_appearance(high_contrast=True)
+    assert chinese_colour() != faint, "高对比度没生效"
+    assert pane._contrast_item.state() == 1, "菜单里没打勾，看不出开着"
+
+    pane.set_appearance(high_contrast=False)
+    assert chinese_colour() == faint
+    assert pane._contrast_item.state() == 0
+
+
+def test_the_type_choice_is_remembered():
+    """A reading preference, not a per-meeting one."""
+    window = _main_window()
+    saved = []
+    window.daemon._save_config = lambda: saved.append(1)
+    assert window._build()
+
+    window.listen_pane.set_appearance(font_size=18, high_contrast=True)
+
+    assert window.daemon.config.listen_font_size == 18
+    assert window.daemon.config.listen_high_contrast is True
+    assert saved, "改了字号没写回配置"
+
+
+def test_the_toolbar_fits_the_bookmark():
+    """NSStackView answers an overfull row by clipping a view, and the view it
+    clips could be 结束. Three separate buttons did not fit 360pt."""
+    window = _main_window()
+    assert window._build()
+    window.set_listening(True)
+    window._window.contentView().layoutSubtreeIfNeeded()
+
+    needed = window.listen_pane._row.fittingSize().width
+    available = window.listen_pane._row.frame().size.width
+    assert available > 100, "书签里应该有真实宽度"
+    assert needed <= available + 0.5, f"工具条要 {needed:.0f}pt，只有 {available:.0f}pt"
+
+
+# --- the summary is a question now ----------------------------------------------
+
+
+def _fake_meeting(answer):
+    import types
+
+    asked = []
+
+    def ask(title, message, *, yes, no):
+        asked.append(message)
+        return answer
+
+    listen = types.SimpleNamespace(
+        running=True, summarise_at_end=None, stop=lambda: None,
+        window=types.SimpleNamespace(ask=ask, set_listening=lambda _r: None))
+    return listen, asked
+
+
+@pytest.mark.parametrize("answer", [True, False])
+def test_ending_a_meeting_asks_before_summarising(answer):
+    """It used to just do it. Several model round trips, and not every meeting
+    wants one."""
+    import types
+
+    from backend.menubar import MenuBar
+
+    listen, asked = _fake_meeting(answer)
+    bar = types.SimpleNamespace(
+        listen=listen, set_status=lambda _t: None, _rebuild=lambda: None)
+
+    MenuBar._stop_listening(bar)
+
+    assert asked, "没问就直接总结了"
+    assert listen.summarise_at_end is answer
+
+
+def test_a_meeting_still_ends_if_the_question_cannot_be_asked():
+    """Headless, or a window that never got built. Ending must not depend on a
+    dialog appearing."""
+    import types
+
+    from backend.menubar import MenuBar
+
+    stopped = []
+    listen = types.SimpleNamespace(
+        running=True, summarise_at_end=None, window=None,
+        stop=lambda: stopped.append(1))
+    bar = types.SimpleNamespace(
+        listen=listen, set_status=lambda _t: None, _rebuild=lambda: None)
+
+    MenuBar._stop_listening(bar)
+    for _ in range(50):
+        if stopped:
+            break
+        import time
+        time.sleep(0.02)
+
+    assert stopped, "问不了就不结束了？"
+
+
+# --- the window can actually be resized -----------------------------------------
+
+
+def test_the_window_is_resizable():
+    """It was not. The author reported that dragging the edge was not smooth;
+    the truth was that the style mask had no Resizable bit, so there was no
+    edge to drag. It began life as a settings window, where that is correct,
+    and became a transcript window, where it is not."""
+    window = _main_window()
+    assert window._build()
+
+    assert window._window.styleMask() & AppKit.NSWindowStyleMaskResizable
+
+
+def test_it_cannot_be_dragged_narrower_than_its_toolbar():
+    """Below the bookmark width NSStackView starts dropping buttons instead of
+    getting narrower, and one of them is 结束."""
+    window = _main_window()
+    assert window._build()
+
+    assert window._window.minSize().width >= window.BOOKMARK_SIZE[0]
+
+    # And the limit has to be the right one: at exactly that width, with the
+    # meeting-time toolbar showing, everything must still fit. (minSize stops
+    # the user's drag, not setFrame_, so this is measured directly.)
+    window.listen_pane._set_running(True)
+    frame = window._window.frame()
+    frame.size.width = window._window.minSize().width
+    window._window.setFrame_display_(frame, True)
+    window._window.contentView().layoutSubtreeIfNeeded()
+
+    row = window.listen_pane._row
+    assert row.fittingSize().width <= row.frame().size.width + 0.5, (
+        f"最窄时工具条要 {row.fittingSize().width:.0f}pt，"
+        f"只有 {row.frame().size.width:.0f}pt")
+
+
+def test_the_bookmark_reopens_at_the_size_it_was_left():
+    """Snapping back to 360×560 on every start would undo the adjustment every
+    time, now that adjusting is possible."""
+    window = _main_window()
+    assert window._build()
+
+    window.set_listening(True)
+    frame = window._window.frame()
+    frame.size.width, frame.size.height = 480, 700
+    window._window.setFrame_display_(frame, True)
+    window.set_listening(False)
+
+    window.set_listening(True)
+    again = window._window.frame().size
+    assert abs(again.width - 480) < 1, f"回到了 {again.width:.0f}pt，没记住"
+    assert abs(again.height - 700) < 1

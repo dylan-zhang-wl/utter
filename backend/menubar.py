@@ -305,7 +305,19 @@ class MenuBar:
         listen = getattr(self, "listen", None)
         if listen is None or not listen.running:
             return
-        self.set_status("正在整理纪要…")
+        # The author asked whether the summary was forced. It was. It is
+        # several model round trips and not every meeting wants one, so it is
+        # now a question — asked once, when they press 结束.
+        window = getattr(listen, "window", None)
+        wants = True
+        if window is not None and hasattr(window, "ask"):
+            wants = window.ask(
+                "结束听记",
+                "记录会自动保存。要不要再让 AI 生成一份全文纪要？\n"
+                "（几次模型往返，十几秒）",
+                yes="生成纪要", no="只保存记录")
+        listen.summarise_at_end = wants
+        self.set_status("正在整理纪要…" if wants else "正在保存…")
 
         def finish():
             listen.stop()

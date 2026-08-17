@@ -146,7 +146,7 @@ class AppConfig(BaseModel):
     # 的固定开销摊得更薄（实测短音频约 375ms/音频秒 vs 长音频 100ms），
     # 占空比升到三四成——余量仍然够，而且翻译本来就是并行的。
     listen_silence_ms: int = 500
-    listen_max_seconds: int = 12
+    listen_max_seconds: int = 8
     # And a floor, added after the first fix overshot. 500ms alone cut on every
     # breath between phrases: 25 pieces, median 23 characters, half of them not
     # sentences at all. A pause only ends an utterance once there are a few
@@ -155,7 +155,14 @@ class AppConfig(BaseModel):
     #
     # The two numbers together bound the latency: nothing waits longer than
     # listen_max_seconds, and nothing arrives in fragments shorter than this.
-    listen_min_seconds: float = 4.0
+    # 1.5, not 4. The floor existed because sentences were being cut from the
+    # audio, so a chunk had to be long enough to *be* a sentence. Sentences are
+    # now cut from the text and a short chunk's tail is simply joined to the
+    # next one — which makes the floor pure waiting. Measured 2026-08-17:
+    # Whisper costs ~1.1s whether the chunk is 10s or 18s, and the LLM ~0.9s,
+    # so the models were never the delay. Waiting for the sentence to finish
+    # being spoken was, and four seconds of that was self-inflicted.
+    listen_min_seconds: float = 1.5
 
     # How many sentences travel in one translation request, and how long the
     # queue may hold a lone one.
@@ -179,6 +186,12 @@ class AppConfig(BaseModel):
 
     # 结束时自动生成纪要。关掉的话记录照写，只是不跑那几次模型往返。
     summarise_at_end: bool = True
+
+    # --- 听记的外观，全部可调 ---
+    listen_font_size: float = 14.0
+    #: 高对比：译文用主文字色而不是次要色。默认关——次要色让原文和译文
+    #: 一眼分得开——但那是个偏好，不该由我替使用者决定。
+    listen_high_contrast: bool = False
 
     # Where to cut, measured on the author's own dictation 2026-08-11. The
     # numbers matter more than they look:

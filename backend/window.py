@@ -69,6 +69,10 @@ class MainWindow:
         self.on_listen_pause = None
         #: Where the window was before it became a bookmark.
         self._normal_frame = None
+        #: The size the bookmark was last left at. Now that the window can be
+        #: resized, snapping back to 360×560 every meeting would undo the
+        #: adjustment on every start.
+        self._bookmark_size = None
 
     def menu_target(self):
         """An object responding to `openWindow:`, for the ⌘, menu item.
@@ -175,7 +179,7 @@ class MainWindow:
                     self._normal_frame = self._window.frame()
                 screen = (self._window.screen() or AppKit.NSScreen.mainScreen()
                           ).visibleFrame()
-                width, height = self.BOOKMARK_SIZE
+                width, height = self._bookmark_size or self.BOOKMARK_SIZE
                 frame = AppKit.NSMakeRect(
                     screen.origin.x + screen.size.width - width - self.BOOKMARK_MARGIN,
                     screen.origin.y + screen.size.height - height - self.BOOKMARK_MARGIN,
@@ -184,6 +188,8 @@ class MainWindow:
                 if self._tabs is not None:
                     self._tabs.setHidden_(True)   # one page while recording
             else:
+                current = self._window.frame().size
+                self._bookmark_size = (current.width, current.height)
                 if self._tabs is not None:
                     self._tabs.setHidden_(False)
                 if self._normal_frame is not None:
@@ -196,6 +202,45 @@ class MainWindow:
     def set_preparing(self, preparing: bool):
         if self.listen_pane:
             self.listen_pane.set_preparing(preparing)
+
+    def _remember_appearance(self, size, contrast) -> None:
+        """Type is a reading preference, not a per-meeting one."""
+        self.daemon.config.listen_font_size = size
+        self.daemon.config.listen_high_contrast = contrast
+        try:
+            self.daemon._save_config()
+        except Exception:
+            log.warning("字号设置没能存下来", exc_info=True)
+
+    def ask(self, title: str, message: str, *, yes: str, no: str) -> bool:
+        """A yes/no sheet, answered synchronously from a background thread."""
+        import threading
+
+        answer = {"yes": True}
+        done = threading.Event()
+
+        def run():
+            import AppKit
+
+            try:
+                alert = AppKit.NSAlert.alloc().init()
+                alert.setMessageText_(title)
+                alert.setInformativeText_(message)
+                alert.addButtonWithTitle_(yes)
+                alert.addButtonWithTitle_(no)
+                answer["yes"] = (alert.runModal() == AppKit.NSAlertFirstButtonReturn)
+            except Exception:
+                log.warning("提问失败，按默认继续", exc_info=True)
+            finally:
+                done.set()
+
+        _on_main(run)
+        done.wait(120)
+        return answer["yes"]
+
+    def set_font_size(self, size):
+        if self.listen_pane:
+            self.listen_pane.set_appearance(font_size=size)
 
     def set_status_line(self, text):
         if self.listen_pane:
@@ -359,12 +404,22 @@ class MainWindow:
                 AppKit.NSWindowStyleMaskTitled
                 | AppKit.NSWindowStyleMaskClosable
                 | AppKit.NSWindowStyleMaskMiniaturizable
+                # Resizable, which a settings window would not be and this one
+                # has to be: it holds a live transcript now, and how much of a
+                # meeting fits on screen is the whole point of the bookmark.
+                # The author reported that dragging the edge was not smooth.
+                # The truth was that there was no edge to drag.
+                | AppKit.NSWindowStyleMaskResizable
                 | AppKit.NSWindowStyleMaskFullSizeContentView,
                 AppKit.NSBackingStoreBuffered, False)
             window.setTitle_("Utter")
             window.setTitlebarAppearsTransparent_(True)
             window.setTitleVisibility_(AppKit.NSWindowTitleHidden)
             window.setMovableByWindowBackground_(True)
+            # The bookmark width, which every row here is known to survive.
+            # Narrower and the toolbar starts dropping buttons rather than
+            # getting narrower, and the button it drops could be 结束.
+            window.setMinSize_(AppKit.NSMakeSize(self.BOOKMARK_SIZE[0], 360))
             window.setDelegate_(self._delegate)
             window.setReleasedWhenClosed_(False)
 
@@ -452,6 +507,10 @@ class MainWindow:
                     on_toggle=lambda: (self.on_listen_toggle or (lambda: None))())
                 self.listen_pane.on_pause = lambda: (
                     self.on_listen_pause() if self.on_listen_pause else False)
+                config = self.daemon.config
+                self.listen_pane.font_size = config.listen_font_size
+                self.listen_pane.high_contrast = config.listen_high_contrast
+                self.listen_pane.on_appearance = self._remember_appearance
             listen_page = self.listen_pane.view()
 
             self._pages = {"listen": listen_page, "settings": settings_page}

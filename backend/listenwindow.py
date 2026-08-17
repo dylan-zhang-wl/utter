@@ -69,6 +69,16 @@ class TranscriptPane:
         #: entry index -> the range in the text holding its translation
         self._ranges: dict[int, tuple[int, int]] = {}
         self._order: list[int] = []
+        #: index -> (english, chinese|None). Kept so changing the font or the
+        #: contrast can redraw the transcript instead of only affecting what
+        #: arrives next.
+        self._said: dict[int, tuple[str, str | None]] = {}
+        self.font_size = 14.0
+        self.high_contrast = False
+        #: Called when the reader changes the type, so it can be remembered.
+        self.on_appearance = None
+        self._type = None
+        self._contrast_item = None
 
     # -- public ------------------------------------------------------------
 
@@ -88,8 +98,9 @@ class TranscriptPane:
             start = storage.length()
             body = translation or WAITING
             storage.appendAttributedString_(
-                self._styled(body + "\n\n", english=False, faded=not translation))
+                self._styled(body + "\n", english=False, faded=not translation))
             storage.endEditing()
+            self._said[index] = (source, translation)
 
             self._ranges[index] = (start, len(body) + 1)   # +1 for the newline
             self._order.append(index)
@@ -120,6 +131,8 @@ class TranscriptPane:
             # Everything after this entry shifted by the difference in length.
             delta = replacement.length() - length
             self._ranges[index] = (start, replacement.length())
+            english = self._said.get(index, ("", None))[0]
+            self._said[index] = (english, text)
             if delta:
                 for other in self._order:
                     if other != index and self._ranges[other][0] > start:
@@ -129,6 +142,50 @@ class TranscriptPane:
                 self._scroll_to_bottom()
 
         _on_main(run)
+
+    def set_appearance(self, *, font_size=None, high_contrast=None) -> None:
+        """Change the type, and redraw what is already on screen.
+
+        Applying a new size only to what arrives next would leave a transcript
+        in two sizes, which is worse than not offering the control.
+        """
+        def run():
+            if font_size is not None:
+                self.font_size = max(10.0, min(28.0, float(font_size)))
+            if high_contrast is not None:
+                self.high_contrast = bool(high_contrast)
+            self._redraw()
+            if self._contrast_item is not None:
+                self._contrast_item.setState_(1 if self.high_contrast else 0)
+            if self.on_appearance:
+                self.on_appearance(self.font_size, self.high_contrast)
+
+        _on_main(run)
+
+    def _redraw(self) -> None:
+        """Rebuild the transcript with the current type."""
+        import AppKit
+
+        if self._text is None:
+            return
+        at_bottom = self._at_bottom()
+        storage = self._text.textStorage()
+        storage.beginEditing()
+        storage.setAttributedString_(
+            AppKit.NSAttributedString.alloc().initWithString_(""))
+        ranges = {}
+        for index in self._order:
+            english, chinese = self._said.get(index, ("", None))
+            storage.appendAttributedString_(self._styled(english + "\n", english=True))
+            start = storage.length()
+            body = chinese or WAITING
+            storage.appendAttributedString_(
+                self._styled(body + "\n", english=False, faded=not chinese))
+            ranges[index] = (start, len(body) + 1)
+        storage.endEditing()
+        self._ranges = ranges
+        if at_bottom:
+            self._scroll_to_bottom()
 
     def set_clock(self, text: str) -> None:
         def run():
@@ -188,24 +245,32 @@ class TranscriptPane:
         import AppKit
 
         paragraph = AppKit.NSMutableParagraphStyle.alloc().init()
-        # Generous leading. A transcript is read in long runs, not scanned.
-        paragraph.setLineSpacing_(3.0)
-        paragraph.setParagraphSpacing_(0.0)
+        # A blank line between entries cost half the screen — five sentences
+        # visible at a time, and a fast speaker outruns that instantly. The
+        # separation is now spacing *after* the Chinese line, which reads the
+        # same and takes a third of the room.
+        paragraph.setLineSpacing_(2.0)
+        paragraph.setParagraphSpacing_(0.0 if english else self.font_size * 0.7)
 
         if english:
-            font = AppKit.NSFont.systemFontOfSize_(14)
+            font = AppKit.NSFont.systemFontOfSize_(self.font_size)
             colour = AppKit.NSColor.labelColor()
         else:
             # Songti for the Chinese. One typeface change does more for the
             # 书卷气 the author asked for than any amount of ornament, and it
             # also separates the translation from the transcript at a glance
             # without a second colour.
-            font = (AppKit.NSFont.fontWithName_size_("Songti SC", 15)
-                    or AppKit.NSFont.fontWithName_size_("STSong", 15)
-                    or AppKit.NSFont.systemFontOfSize_(14))
-            colour = (AppKit.NSColor.tertiaryLabelColor() if faded
-                      else AppKit.NSColor.secondaryLabelColor())
-            paragraph.setLineSpacing_(5.0)   # serif needs more air
+            size = self.font_size + 1        # serif reads small at the same size
+            font = (AppKit.NSFont.fontWithName_size_("Songti SC", size)
+                    or AppKit.NSFont.fontWithName_size_("STSong", size)
+                    or AppKit.NSFont.systemFontOfSize_(self.font_size))
+            if faded:
+                colour = AppKit.NSColor.tertiaryLabelColor()
+            elif self.high_contrast:
+                colour = AppKit.NSColor.labelColor()
+            else:
+                colour = AppKit.NSColor.secondaryLabelColor()
+            paragraph.setLineSpacing_(3.0)
 
         return AppKit.NSAttributedString.alloc().initWithString_attributes_(
             text, {
@@ -230,6 +295,7 @@ class TranscriptPane:
         holder.setTranslatesAutoresizingMaskIntoConstraints_(False)
 
         controls = self._controls()
+        self._row = controls
         scroll, text = self._transcript()
         self._text = text
         for sub in (controls, scroll):
@@ -291,6 +357,28 @@ class TranscriptPane:
         spacer.setContentHuggingPriority_forOrientation_(
             1, AppKit.NSLayoutConstraintOrientationHorizontal)
         row.addArrangedSubview_(spacer)
+
+        # Type controls behind one Aa button rather than three in the row: at
+        # 360pt the bookmark has no width to spare, and NSStackView answers an
+        # overfull row by clipping a view — which could be 结束.
+        self._type = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            AppKit.NSMakeRect(0, 0, 50, 24), True)
+        self._type.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        self._type.setControlSize_(AppKit.NSControlSizeSmall)
+        menu = AppKit.NSMenu.alloc().init()
+        menu.addItemWithTitle_action_keyEquivalent_("Aa", None, "")
+        smaller = menu.addItemWithTitle_action_keyEquivalent_(
+            "缩小字号", "smaller:", "-")
+        bigger = menu.addItemWithTitle_action_keyEquivalent_(
+            "放大字号", "bigger:", "+")
+        menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        contrast = menu.addItemWithTitle_action_keyEquivalent_(
+            "高对比度译文", "contrast:", "")
+        for item in (smaller, bigger, contrast):
+            item.setTarget_(self._delegate)
+        self._contrast_item = contrast
+        self._type.setMenu_(menu)
+        row.addArrangedSubview_(self._type)
 
         self._status = AppKit.NSTextField.labelWithString_("")
         self._status.setFont_(AppKit.NSFont.systemFontOfSize_(11))
@@ -419,6 +507,16 @@ class TranscriptPane:
             return TranscriptPane._delegate_class_cache
 
         class UtterTranscriptDelegate(AppKit.NSObject):
+            def smaller_(self, _s):
+                self.owner.set_appearance(font_size=self.owner.font_size - 1)
+
+            def bigger_(self, _s):
+                self.owner.set_appearance(font_size=self.owner.font_size + 1)
+
+            def contrast_(self, _s):
+                self.owner.set_appearance(
+                    high_contrast=not self.owner.high_contrast)
+
             def pause_(self, sender):
                 try:
                     owner = self.owner
