@@ -73,6 +73,10 @@ class TranscriptPane:
         #: contrast can redraw the transcript instead of only affecting what
         #: arrives next.
         self._said: dict[int, tuple[str, str | None]] = {}
+        #: How many characters of speculative preview sit at the very end of
+        #: the storage. Always last, so it never disturbs a committed entry's
+        #: offsets — and always removed before anything is committed.
+        self._preview_len = 0
         self.font_size = 14.0
         self.high_contrast = False
         #: Called when the reader changes the type, so it can be remembered.
@@ -94,6 +98,7 @@ class TranscriptPane:
             at_bottom = self._at_bottom()
 
             storage.beginEditing()
+            self._drop_preview(storage)
             storage.appendAttributedString_(self._styled(source + "\n", english=True))
             start = storage.length()
             body = translation or WAITING
@@ -143,6 +148,46 @@ class TranscriptPane:
 
         _on_main(run)
 
+    def preview(self, text: str) -> None:
+        """The grey tail: what a small model thinks is being said right now.
+
+        It is speculative, so it is drawn as speculation — dimmed, with an
+        ellipsis — and it lives at the very end of the storage where it cannot
+        shift any committed entry's offsets. `append` removes it before writing
+        a real sentence, so the two can never both claim the same stretch.
+        """
+        def run():
+            if self._text is None:
+                return
+            import AppKit
+
+            storage = self._text.textStorage()
+            at_bottom = self._at_bottom()
+            body = (text or "").strip()
+            storage.beginEditing()
+            self._drop_preview(storage)
+            if body:
+                drawn = self._styled(body + "…\n", english=True, faded=True)
+                storage.appendAttributedString_(drawn)
+                self._preview_len = drawn.length()
+            storage.endEditing()
+            if at_bottom:
+                self._scroll_to_bottom()
+
+        _on_main(run)
+
+    def _drop_preview(self, storage) -> None:
+        """Remove the speculative tail. Caller holds the edit."""
+        import AppKit
+
+        if not self._preview_len:
+            return
+        start = storage.length() - self._preview_len
+        if start >= 0:
+            storage.deleteCharactersInRange_(
+                AppKit.NSMakeRange(start, self._preview_len))
+        self._preview_len = 0
+
     def set_appearance(self, *, font_size=None, high_contrast=None) -> None:
         """Change the type, and redraw what is already on screen.
 
@@ -183,6 +228,7 @@ class TranscriptPane:
                 self._styled(body + "\n", english=False, faded=not chinese))
             ranges[index] = (start, len(body) + 1)
         storage.endEditing()
+        self._preview_len = 0      # the redraw wrote committed text only
         self._ranges = ranges
         if at_bottom:
             self._scroll_to_bottom()
@@ -401,6 +447,8 @@ class TranscriptPane:
         self._set_running(False)
 
     def _set_running(self, running: bool) -> None:
+        if not running:
+            self.preview("")
         if self._button is None:
             return
         self._button.setTitle_("结束听记" if running else "开始听记")

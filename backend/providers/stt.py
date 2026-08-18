@@ -220,3 +220,39 @@ def get_stt_provider(
         reasons[provider.id] = reason or "unavailable"
 
     raise NoProviderAvailable(reasons)
+
+
+def draft_provider(
+    tier: str,
+    hardware: Hardware | None = None,
+    providers: list[SttProvider] | None = None,
+    preferred: str | None = None,
+) -> SttProvider | None:
+    """A second, much cheaper provider, for work that is never written down.
+
+    Listen mode's preview re-reads the sentence in progress every second. That
+    is only affordable with a small model — measured on an M2, whisper-base-q4
+    answers a 10-second buffer in 166ms against large-v3-turbo's 1109ms.
+
+    Which model a tier means is the catalog's business and which provider runs
+    it is the registry's, so this asks for a working provider and reopens it at
+    the smaller tier rather than naming a class (铁律 6).
+
+    Returns None when the chosen provider ships a single model and has no
+    smaller tier to drop to. That is not an error: the preview is a luxury and
+    nothing in the record depends on it.
+    """
+    import inspect
+
+    base = get_stt_provider(hardware=hardware, providers=providers,
+                            preferred=preferred)
+    kind = type(base)
+    if "tier" not in inspect.signature(kind.__init__).parameters:
+        log.info("provider %r has no tiers, so no preview", getattr(base, "id", kind))
+        return None
+    smaller = kind(tier)
+    available, why = _check(smaller)
+    if not available:
+        log.info("preview provider unavailable: %s", why)
+        return None
+    return smaller

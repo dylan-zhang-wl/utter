@@ -42,6 +42,12 @@ class ListenController:
         self._activity = None
         self._sentences = None
         self._next_index = 0
+        #: Audio since the last boundary, for the preview to re-read. Held
+        #: separately from the segmenter's own history so that nothing the
+        #: preview does can reach dictation, which shares that class.
+        self._heard = None
+        self._heard_lock = threading.Lock()
+        self._preview = None
         self.error: str | None = None
         #: Whether 结束 also writes 纪要.md. The author asked whether it was
         #: forced; it was, and it should not be — a summary is several model
@@ -131,9 +137,77 @@ class ListenController:
         # the next one.
         self._sentences = SentenceAssembler()
         self._next_index = 0
+        self._reset_heard()
+        self._preview = self._build_preview()
         self._source = self._open_source(source, pids, device)
         self._source.start()
+        if self._preview is not None:
+            self._preview.start()
         self._hold_awake()
+
+    #: Audio kept for the preview to re-read. A hard ceiling rather than a
+    #: guess: a VAD that never hears a pause must not grow this without bound.
+    HEARD_CEILING_SECONDS = 30
+
+    #: How much audio the preview keeps across a ceiling cut. A cut imposed at
+    #: the ceiling lands mid-word, and a preview buffer that starts there reads
+    #: the fragment as a word of its own — 「unalienable rights」 came back as
+    #: 「I'm not a highly in-n-able rights」. A natural pause needs none of
+    #: this: the speaker stopped, so the next buffer starts on a word.
+    CARRY_SECONDS = 2.0
+
+    def _reset_heard(self, *, carry: float = 0.0) -> None:
+        import numpy as np
+
+        with self._heard_lock:
+            keep = int(carry * 16000)
+            if keep and self._heard is not None and len(self._heard) > keep:
+                self._heard = self._heard[-keep:].copy()
+            else:
+                self._heard = np.zeros(0, dtype="float32")
+
+    def _remember_heard(self, chunk) -> None:
+        import numpy as np
+
+        with self._heard_lock:
+            if self._heard is None:
+                return
+            self._heard = np.concatenate([self._heard, np.asarray(chunk, dtype="float32")])
+            ceiling = self.HEARD_CEILING_SECONDS * 16000
+            if len(self._heard) > ceiling:
+                self._heard = self._heard[-ceiling:]
+
+    def _heard_so_far(self):
+        with self._heard_lock:
+            return None if self._heard is None else self._heard.copy()
+
+    def _build_preview(self):
+        """The grey tail, or None if it is switched off or cannot be had.
+
+        Failing to build it is not a reason to fail the meeting: the committed
+        transcript does not depend on it in any way.
+        """
+        if not getattr(self.config, "listen_preview", False):
+            return None
+        try:
+            from backend.preview import PreviewStream
+            from backend.providers.stt import draft_provider
+
+            draft = draft_provider(self.config.listen_preview_tier,
+                                   preferred=self.config.stt_provider)
+            if draft is None:
+                return None
+            return PreviewStream(
+                draft.transcribe, self._heard_so_far, self._show_preview,
+                tick=self.config.listen_preview_tick,
+                language=self.config.dictate_language or "en")
+        except Exception:
+            log.warning("预览层起不来，只是没有灰色的字，记录不受影响", exc_info=True)
+            return None
+
+    def _show_preview(self, text: str) -> None:
+        if self.window is not None and hasattr(self.window, "preview"):
+            self.window.preview(text)
 
     def _open_source(self, source: str, pids, device=None):
         from backend.audio_source import MicSource
@@ -194,8 +268,16 @@ class ListenController:
                         # a paragraph of room noise.
                         continue
                     self.recording.write(chunk)
+                    self._remember_heard(chunk)
                     for event in self._segmenter.feed(chunk):
                         if isinstance(event, SpeechEnd):
+                            # The preview was speculating about this utterance;
+                            # the committed sentences are about to say what it
+                            # actually was, so drop the guess first.
+                            self._reset_heard(
+                                carry=self.CARRY_SECONDS if event.forced else 0.0)
+                            if self._preview is not None:
+                                self._preview.clear()
                             self._pipeline.handle(event)
                 if not got:
                     time.sleep(TICK_SECONDS)
@@ -262,6 +344,8 @@ class ListenController:
 
         if is_hallucination(utterance.raw_text):
             log.info("丢掉一条静音幻觉：%r", utterance.raw_text[:40])
+            if self._preview is not None:
+                self._preview.resume()
             return
 
         # 铁律 1's failure mode, and it reached a real transcript: one entry
@@ -278,6 +362,9 @@ class ListenController:
 
         for source in self._sentences.feed(text):
             self._emit(source, utterance)
+        # This chunk has had its say; the tail can start guessing again.
+        if self._preview is not None:
+            self._preview.resume()
 
     def _emit(self, source: str, utterance) -> None:
         """One finished sentence into the record and onto the screen."""
@@ -308,7 +395,13 @@ class ListenController:
         become thirty seconds of room noise in the transcript.
         """
         self._paused = not getattr(self, "_paused", False)
+        if self._preview is not None:
+            # Audio is drained but not fed while paused, so there is nothing
+            # for the preview to read — and a coffee break should not keep a
+            # model warm on the GPU.
+            self._preview.clear() if self._paused else None
         if self._paused:
+            self._reset_heard()
             if self._queue is not None:
                 self._queue.flush()
             if self.session is not None:
@@ -330,6 +423,12 @@ class ListenController:
                 log.warning("结束回调出错", exc_info=True)
 
     def _teardown(self, *, summarise: bool = False) -> None:
+        if self._preview is not None:
+            self._preview.stop()
+            if self._preview.rounds:
+                log.info("预览：%d 轮，模型共 %.1fs",
+                         self._preview.rounds, self._preview.model_seconds)
+            self._preview = None
         if self._source is not None:
             try:
                 self._source.stop()

@@ -164,6 +164,14 @@ class AppConfig(BaseModel):
     # being spoken was, and four seconds of that was self-inflicted.
     listen_min_seconds: float = 1.5
 
+    #: The grey tail — a small model re-reading the sentence in progress so the
+    #: screen is not blank while somebody talks. Never archived, never
+    #: translated; see backend/preview.py for why it has to be a second model
+    #: rather than a faster tick of the first one.
+    listen_preview: bool = True
+    listen_preview_tick: float = 1.0
+    listen_preview_tier: str = "minimal"
+
     # How many sentences travel in one translation request, and how long the
     # queue may hold a lone one.
     #
@@ -181,8 +189,8 @@ class AppConfig(BaseModel):
     # sentence can see its referent in the first — while costing at most one
     # sentence of lag. Translating each in isolation was fast and read like a
     # list of unrelated fragments.
-    translate_batch: int = 2
-    translate_wait_seconds: float = 2.5
+    translate_batch: int = 1
+    translate_wait_seconds: float = 1.0
 
     # 结束时自动生成纪要。关掉的话记录照写，只是不跑那几次模型往返。
     summarise_at_end: bool = True

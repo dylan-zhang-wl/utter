@@ -367,17 +367,25 @@ def test_the_status_line_says_what_is_happening():
     assert str(window.listen_pane._status.stringValue()) == ""
 
 
-def test_translation_waits_for_at_most_one_more_sentence():
-    """Two constraints pulling opposite ways, and the setting has to satisfy
-    both. A batch of three was 15-36 seconds of nothing once entries became
-    whole sentences; a batch of one arrived fast and read like unrelated
-    fragments, because the model never saw two sentences together. Two is the
-    pair that coheres at the cost of one sentence of lag."""
+def test_translation_starts_at_the_first_sentence_not_the_second():
+    """A batch of two cost a sentence of lag, and it was being paid for
+    nothing.
+
+    The batch existed because a batch of one 「read like unrelated fragments」 —
+    true when an entry was a VAD fragment, and no longer true now that an entry
+    is a whole sentence and the queue sends the previous two source/translation
+    pairs as context. Re-checked against gpt-5.4-mini on six consecutive
+    sentences of a real talk: one at a time produced 「而是因为民主出了错」
+    continuing the sentence before it, and 「它就会乘虚而入」 resolving the
+    pronoun — indistinguishable from the pair.
+
+    So the first cut is translated while the speaker is still on the second,
+    which is what the author asked for."""
     from backend.config import AppConfig
 
     config = AppConfig()
-    assert config.translate_batch == 2
-    assert config.translate_wait_seconds <= 3.0
+    assert config.translate_batch == 1
+    assert config.translate_wait_seconds <= 1.5
 
 
 # --- the type controls ----------------------------------------------------------
@@ -600,3 +608,93 @@ def test_a_translation_still_lands_correctly_after_a_redraw():
     assert text.index("Second sentence") < text.index("第二句") < text.index("Third sentence")
     assert text.index("First sentence") < text.index("第一句") < text.index("Second sentence")
     assert text.count("…") == 1, "只剩第三句还没译"
+
+
+# --- the grey tail --------------------------------------------------------------
+
+
+def test_the_preview_shows_with_an_ellipsis_and_can_be_cleared(window):
+    window.preview("Everyone I talked to")
+
+    assert "Everyone I talked to…" in body(window)
+
+    window.preview("")
+    assert "Everyone I talked to" not in body(window)
+
+
+def test_the_preview_replaces_itself_rather_than_piling_up(window):
+    window.preview("Everyone")
+    window.preview("Everyone I")
+    window.preview("Everyone I talked to")
+
+    assert body(window).count("Everyone") == 1, "预览应该是替换，不是追加"
+
+
+def test_a_committed_sentence_removes_the_guess_that_preceded_it(window):
+    """The preview was speculating about this very utterance. Leaving it above
+    the real sentence would show the same words twice, one of them wrong."""
+    window.preview("Everyone I talked too said")
+    window.append(0, "Everyone I talked to said I was asking the wrong question.")
+
+    text = body(window)
+    assert "talked too" not in text, "定稿之后还留着猜测"
+    assert "Everyone I talked to said I was asking the wrong question." in text
+
+
+def test_a_preview_never_shifts_a_committed_translation(window):
+    """The failure this whole layer must not be able to cause. The preview sits
+    at the very end of the storage; if it ever landed in the middle, every
+    entry after it would take its Chinese from the wrong English."""
+    window.append(0, "First sentence")
+    window.append(1, "Second sentence")
+    window.preview("and then the speaker went on")
+
+    window.translated(0, "第一句")
+    window.translated(1, "第二句")
+
+    text = body(window)
+    assert text.index("First sentence") < text.index("第一句") < text.index("Second sentence")
+    assert text.index("Second sentence") < text.index("第二句")
+    assert text.index("第二句") < text.index("and then the speaker went on")
+
+
+def test_a_translation_arriving_while_a_preview_is_up_lands_correctly(window):
+    """Both happen constantly and independently — one on the model thread, one
+    on the translation thread."""
+    window.append(0, "First sentence")
+    window.append(1, "Second sentence")
+
+    window.preview("still speaking")
+    window.translated(1, "第二句")
+    window.preview("still speaking a bit more")
+    window.translated(0, "第一句")
+
+    text = body(window)
+    assert text.index("First sentence") < text.index("第一句") < text.index("Second sentence")
+    assert text.index("Second sentence") < text.index("第二句")
+    assert text.count("still speaking") == 1
+
+
+def test_changing_the_type_does_not_leave_a_stale_preview_behind(window):
+    window.append(0, "Committed sentence", "已定稿")
+    window.preview("speculating")
+
+    window.set_appearance(font_size=20)
+
+    text = body(window)
+    assert "Committed sentence" in text and "已定稿" in text
+    assert "speculating" not in text, "重绘应该只画定稿的内容"
+
+
+def test_ending_the_meeting_drops_the_preview():
+    """Whatever was half-heard when 结束 was pressed is not part of anything."""
+    window = _main_window()
+    assert window._build()
+    pane = window.listen_pane
+    pane.append(0, "Real sentence", "真句子")
+    pane.preview("half heard")
+
+    window.set_listening(False)
+
+    assert "half heard" not in body(pane)
+    assert "Real sentence" in body(pane)

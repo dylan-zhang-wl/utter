@@ -155,6 +155,10 @@ class MainWindow:
         if self.listen_pane:
             self.listen_pane.set_clock(text)
 
+    def preview(self, text):
+        if self.listen_pane:
+            self.listen_pane.preview(text)
+
     #: The bookmark: narrow, tall, and parked at the top right while a meeting
     #: runs. The author's use is watching subtitles beside something else, so
     #: the full-width settings window is the wrong shape for the only moment it
