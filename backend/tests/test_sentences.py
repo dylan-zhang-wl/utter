@@ -121,3 +121,119 @@ def test_three_chunks_of_a_talk_come_out_as_sentences():
         "Venuti argues that fluency is itself an ideology.",
         "If we accept that, then foreignisation is a political choice.",
     ]
+
+
+# --- what a real talk about 「Democracy 2.0」 turned up --------------------------
+
+
+@pytest.mark.parametrize("text, expected", [
+    # the stop belongs to the number, not to the thought
+    ("Democracy 2.0 is the phase where we expand who is included.",
+     ["Democracy 2.0 is the phase where we expand who is included."]),
+    ("It cost 3.5 million. That is a lot.",
+     ["It cost 3.5 million.", "That is a lot."]),
+    # an initial being spelled out, and the lower-case word that follows it
+    ("Anderson argues that in fact the U.S. was not a democracy until 1965.",
+     ["Anderson argues that in fact the U.S. was not a democracy until 1965."]),
+    # but a sentence that genuinely ends on an abbreviation still ends
+    ("We visited the U.S. Then we flew home.",
+     ["We visited the U.S.", "Then we flew home."]),
+    ("J. R. R. Tolkien wrote it. Then he revised it.",
+     ["J. R. R. Tolkien wrote it.", "Then he revised it."]),
+    # ordinary sentences are untouched
+    ("She left. He stayed.", ["She left.", "He stayed."]),
+    ("Dr. Smith arrived. Then we began.", ["Dr. Smith arrived.", "Then we began."]),
+    ("Who counts? That is the question.", ["Who counts?", "That is the question."]),
+])
+def test_a_full_stop_is_not_always_the_end_of_a_sentence(text, expected):
+    """Every one of these arrived broken in a 52-entry session: 「Democracy 2.」
+    as one entry and 「0, Far-Right extremists…」 as the next, with the
+    translator dutifully rendering the stray 「0，」."""
+    from backend.sentences import split_sentences
+
+    assert split_sentences(text)[0] == expected
+
+
+# --- the full stop the model adds because the audio ran out ---------------------
+
+
+def test_a_sentence_cut_at_the_ceiling_waits_for_the_rest_of_itself():
+    """Whisper finishes whatever it is given with a full stop, spoken or not.
+    Fifteen of fifty-two entries in a real session began with a lower-case
+    word, which is what a sentence chopped in half looks like."""
+    from backend.sentences import SentenceAssembler
+
+    assembler = SentenceAssembler()
+
+    assert assembler.feed("It would be more of a revelation to me.", cut=True) == []
+    assert assembler.feed("than it was to you.") == [
+        "It would be more of a revelation to me than it was to you."]
+
+
+def test_a_capital_letter_says_the_full_stop_was_real_after_all():
+    """The other half of the same guess. The speaker did finish at the ceiling,
+    and the next chunk proves it by starting a new sentence."""
+    from backend.sentences import SentenceAssembler
+
+    assembler = SentenceAssembler()
+
+    assert assembler.feed("Democracy needs to evolve again.", cut=True) == []
+    assert assembler.feed("I want us to think about democracy in phases.") == [
+        "Democracy needs to evolve again.",
+        "I want us to think about democracy in phases."]
+
+
+def test_only_the_last_sentence_of_a_cut_chunk_waits():
+    """Everything before it ended where the speaker ended it."""
+    from backend.sentences import SentenceAssembler
+
+    assembler = SentenceAssembler()
+
+    got = assembler.feed("They're not. We were used to it. But separate.", cut=True)
+
+    assert got == ["They're not.", "We were used to it."]
+    assert assembler.pending == "But separate"
+
+
+def test_a_natural_pause_is_still_trusted_immediately():
+    """The whole point of waiting for the speaker to stop. A chunk that ended
+    because they stopped talking must not gain a chunk of latency."""
+    from backend.sentences import SentenceAssembler
+
+    assembler = SentenceAssembler()
+
+    assert assembler.feed("The cast and coaches were also patient with me.") == [
+        "The cast and coaches were also patient with me."]
+
+
+def test_the_end_of_a_meeting_gives_the_full_stop_back():
+    """铁律 8: nothing is lost, and it should not read as unfinished either."""
+    from backend.sentences import SentenceAssembler
+
+    assembler = SentenceAssembler()
+    assembler.feed("We still tend to focus more.", cut=True)
+
+    assert assembler.flush() == ["We still tend to focus more."]
+
+
+def test_a_cut_chunk_ending_on_a_question_mark_is_left_alone():
+    """A question mark is not the model's default filler; a full stop is."""
+    from backend.sentences import SentenceAssembler
+
+    assembler = SentenceAssembler()
+
+    assert assembler.feed("Who counts?", cut=True) == ["Who counts?"]
+
+
+@pytest.mark.parametrize("junk", ["...", ". . .", "—", "?!"])
+def test_punctuation_alone_is_not_a_sentence(junk):
+    """「...」 was entry #0 of a real session, and went to the translator."""
+    from backend.sentences import split_sentences
+
+    assert split_sentences(junk)[0] == []
+
+
+def test_a_real_sentence_around_the_punctuation_still_survives():
+    from backend.sentences import split_sentences
+
+    assert split_sentences("... And then she spoke.")[0] == ["And then she spoke."]

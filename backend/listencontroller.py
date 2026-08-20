@@ -381,7 +381,7 @@ class ListenController:
             log.warning("折叠了 %d 次复读：%d 字 → %d 字",
                         removed, len(utterance.raw_text), len(text))
 
-        for source in self._sentences.feed(text):
+        for source in self._sentences.feed(text, cut=utterance.forced):
             self._emit(source, utterance)
         # This chunk has had its say; the tail can start guessing again.
         if self._preview is not None:

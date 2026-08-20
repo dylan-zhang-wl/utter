@@ -480,3 +480,46 @@ def test_dictation_is_unaffected_because_the_floor_defaults_to_off():
     from backend.vad import VadSegmenter
 
     assert VadSegmenter().min_utterance_sec == 0.0
+
+
+def test_a_ceiling_cut_does_not_hand_the_same_audio_out_twice():
+    """Pre-roll protects the first syllable of a fresh utterance. Applied to a
+    segment that opened by reopening at the ceiling it reaches back into audio
+    the previous chunk already transcribed, and the words arrive twice —
+    「…be more of a revelation to me.」 then 「to me than it was to you.」"""
+    import numpy as np
+
+    from backend.vad import FRAME_SAMPLES, SAMPLE_RATE, SpeechEnd, VadSegmenter
+
+    segmenter = VadSegmenter(max_utterance_sec=1, vad_silence_ms=10_000,
+                             speech_prob=lambda frame: 1.0)
+    ends = []
+    for _ in range(int(3 * SAMPLE_RATE) // FRAME_SAMPLES):
+        ends += [e for e in segmenter.feed(np.ones(FRAME_SAMPLES, dtype="float32"))
+                 if isinstance(e, SpeechEnd)]
+
+    assert len(ends) >= 2, "应该撞到天花板不止一次"
+    for earlier, later in zip(ends, ends[1:]):
+        assert later.start_sample >= earlier.end_sample, (
+            f"第二段从 {later.start_sample} 开始，而第一段到 {earlier.end_sample} "
+            f"才结束，中间 {earlier.end_sample - later.start_sample} 个样本被转录了两次")
+
+
+def test_a_fresh_utterance_still_gets_its_pre_roll():
+    """The overlap only comes off where the audio was already sent; a speaker
+    starting to talk still needs the moment before the detector noticed."""
+    import numpy as np
+
+    from backend.vad import FRAME_SAMPLES, SpeechEnd, VadSegmenter
+
+    voiced = iter([False] * 20 + [True] * 60 + [False] * 60)
+    segmenter = VadSegmenter(vad_silence_ms=200, min_utterance_sec=0.0,
+                             speech_prob=lambda frame: 1.0 if next(voiced) else 0.0)
+    ends = []
+    for _ in range(140):
+        ends += [e for e in segmenter.feed(np.zeros(FRAME_SAMPLES, dtype="float32"))
+                 if isinstance(e, SpeechEnd)]
+
+    assert ends, "没切出任何一段"
+    speech_began = 20 * FRAME_SAMPLES
+    assert ends[0].start_sample < speech_began, "第一段没有留出前摇"

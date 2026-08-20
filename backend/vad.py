@@ -175,6 +175,13 @@ class VadSegmenter:
     _speech_start: int = 0
     _silence_frames: int = 0
     _last_voiced: int = 0
+    #: True when this utterance opened by reopening after a ceiling cut rather
+    #: than by somebody starting to speak. Pre-roll exists to protect the first
+    #: syllable of a fresh utterance; applied here it would reach back into
+    #: audio the previous chunk already transcribed, and the words come out
+    #: twice — 「…be more of a revelation to me.」 then 「to me than it was to
+    #: you.」
+    _continuing: bool = False
 
     def __post_init__(self):
         if self.speech_prob is None:
@@ -205,7 +212,9 @@ class VadSegmenter:
         self._history = np.zeros(0, dtype=np.float32)
         self._history_origin = self._cursor
         self._in_speech = False
+        self._continuing = False
         self._silence_frames = 0
+        self._continuing = False
 
     def feed(self, chunk: np.ndarray) -> list[Event]:
         """Consume audio, return whatever boundaries it revealed."""
@@ -283,6 +292,7 @@ class VadSegmenter:
             # reopen immediately — they are still talking.
             events.append(self._close(self._cursor, forced=True))
             self._in_speech = True
+            self._continuing = True    # no pre-roll: that audio already went out
             self._speech_start = self._cursor
             self._silence_frames = 0
             self._last_voiced = self._cursor
@@ -291,7 +301,8 @@ class VadSegmenter:
         return events
 
     def _close(self, end_sample: int, *, forced: bool) -> SpeechEnd:
-        start = max(0, self._speech_start - self._pre_roll)
+        start = (self._speech_start if self._continuing
+                 else max(0, self._speech_start - self._pre_roll))
         audio = self._slice(start, end_sample)
 
         self._in_speech = False
