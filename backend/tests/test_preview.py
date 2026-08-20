@@ -288,3 +288,75 @@ def test_a_chunk_thrown_away_as_a_hallucination_still_releases_the_tail():
         confidence=-0.8))
 
     assert released, "幻觉被丢掉之后预览就再也不动了"
+
+
+# --- what the first real meeting with a preview turned up -----------------------
+
+
+def test_listen_has_its_own_language_and_does_not_borrow_dictation_s():
+    """They are opposite ends of the same person. The author dictates in
+    Chinese, so dictate_language is 'zh'; the lecture they are listening to is
+    in English. Listen mode read the dictation setting until 2026-08-20 and so
+    told Whisper an English talk was Chinese — the big model shrugged it off,
+    the small preview model put 「它有色彩的…」 under the English."""
+    from backend.config import AppConfig
+
+    config = AppConfig()
+    assert config.listen_language == "en"
+    assert config.dictate_language == "zh"
+    assert config.listen_language != config.dictate_language
+
+
+def test_the_controller_listens_in_the_listen_language(monkeypatch):
+    from backend.config import AppConfig
+    from backend.listencontroller import ListenController
+
+    config = AppConfig()
+    config.dictate_language = "zh"
+    config.listen_language = "en"
+    controller = ListenController(config)
+
+    seen = {}
+    monkeypatch.setattr(
+        "backend.providers.stt.draft_provider",
+        lambda tier, **kw: type("P", (), {"transcribe": staticmethod(lambda *a, **k: "")})())
+    stream = controller._build_preview()
+    if stream is not None:
+        seen["language"] = stream._language
+        assert seen["language"] == "en", "预览用了听写的语言"
+
+
+def test_a_meeting_that_never_started_leaves_no_folder(tmp_path):
+    """Four empty dated folders appeared in thirteen seconds while the
+    aggregate audio device was being retried by hand."""
+    import types
+
+    from backend.config import AppConfig
+    from backend.listencontroller import ListenController
+
+    controller = ListenController(AppConfig())
+    directory = tmp_path / "20260820-081935"
+    directory.mkdir()
+    controller.session = types.SimpleNamespace(directory=directory)
+
+    controller._discard_empty_session()
+
+    assert not directory.exists()
+    assert controller.session is None
+
+
+def test_a_meeting_that_wrote_something_keeps_its_folder(tmp_path):
+    import types
+
+    from backend.config import AppConfig
+    from backend.listencontroller import ListenController
+
+    controller = ListenController(AppConfig())
+    directory = tmp_path / "20260820-081948"
+    directory.mkdir()
+    (directory / "entries.jsonl").write_text("{}")
+    controller.session = types.SimpleNamespace(directory=directory)
+
+    controller._discard_empty_session()
+
+    assert directory.exists(), "写过东西的目录不能删"

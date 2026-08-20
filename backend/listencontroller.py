@@ -78,6 +78,7 @@ class ListenController:
             self.error = str(exc)
             log.warning("听记起不来：%s", exc, exc_info=True)
             self._teardown()
+            self._discard_empty_session()
             return False
 
         self._stop.clear()
@@ -122,7 +123,7 @@ class ListenController:
 
         self._pipeline = listen_pipeline(
             stt=self._stt, sink=self._on_utterance,
-            language=self.config.dictate_language or "en",
+            language=self.config.listen_language or "en",
             vocabulary=list(self.config.vocabulary or []),
             translate=None)          # the queue does it, in batches
         self._segmenter = VadSegmenter(
@@ -200,7 +201,7 @@ class ListenController:
             return PreviewStream(
                 draft.transcribe, self._heard_so_far, self._show_preview,
                 tick=self.config.listen_preview_tick,
-                language=self.config.dictate_language or "en")
+                language=self.config.listen_language or "en")
         except Exception:
             log.warning("预览层起不来，只是没有灰色的字，记录不受影响", exc_info=True)
             return None
@@ -208,6 +209,26 @@ class ListenController:
     def _show_preview(self, text: str) -> None:
         if self.window is not None and hasattr(self.window, "preview"):
             self.window.preview(text)
+
+    def _discard_empty_session(self) -> None:
+        """A meeting that never started should not leave a folder behind.
+
+        The session directory is created before the audio device is opened, so
+        every failed 开始听记 left an empty dated folder in ~/Utter/listen.
+        Four of them appeared in thirteen seconds on 2026-08-20 while the
+        aggregate device was being retried by hand.
+        """
+        session, self.session = self.session, None
+        directory = getattr(session, "directory", None)
+        if directory is None:
+            return
+        try:
+            if any(directory.iterdir()):
+                return          # something was written; keep it
+            directory.rmdir()
+            log.info("没起来的听记，删掉空目录 %s", directory.name)
+        except Exception:
+            log.debug("删空目录失败", exc_info=True)
 
     def _open_source(self, source: str, pids, device=None):
         from backend.audio_source import MicSource

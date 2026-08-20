@@ -266,8 +266,7 @@ class SystemAudioSource:
         try:
             # PortAudio enumerated its devices at init and the aggregate did
             # not exist then. Without this it is simply not in the list.
-            refresh_devices()
-            index = self._find_device(sd)
+            index = self._await_device(sd, refresh_devices)
             info = sd.query_devices(index)
             rate = int(info["default_samplerate"])
             channels = int(info["max_input_channels"])
@@ -286,6 +285,32 @@ class SystemAudioSource:
             self._destroy()
             raise
         return self
+
+    #: Core Audio registers a newly created aggregate asynchronously, so the
+    #: first look can miss it. Measured on this machine 2026-08-20: four
+    #: consecutive 开始听记 failed with 「聚合设备建好了，但音频系统看不到它」
+    #: and the fifth worked — the device was arriving, just not yet. Each
+    #: failure cost a click and left an empty session folder behind.
+    DEVICE_WAIT_TRIES = 8
+    DEVICE_WAIT_SECONDS = 0.15
+
+    def _await_device(self, sd, refresh_devices) -> int:
+        last = None
+        for attempt in range(self.DEVICE_WAIT_TRIES):
+            # PortAudio enumerated its devices at init and the aggregate did
+            # not exist then. Without this it is simply not in the list.
+            refresh_devices()
+            try:
+                index = self._find_device(sd)
+            except SystemAudioError as exc:
+                last = exc
+                time.sleep(self.DEVICE_WAIT_SECONDS)
+                continue
+            if attempt:
+                log.info("聚合设备等了 %.1fs 才出现",
+                         attempt * self.DEVICE_WAIT_SECONDS)
+            return index
+        raise last
 
     def _find_device(self, sd) -> int:
         for index, device in enumerate(sd.query_devices()):

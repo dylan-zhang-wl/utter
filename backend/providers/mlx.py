@@ -10,10 +10,14 @@ unavailable — an ImportError at import time would take the registry down with 
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from backend import catalog
 from backend.hardware import detect as detect_hardware
+
+log = logging.getLogger(__name__)
 
 # 铁律 1, amended 2026-08-10 after a repetition loop in real use.
 #
@@ -58,6 +62,33 @@ class MlxWhisperProvider:
     def _repo(self) -> str:
         return catalog.resolve(self._tier, self._hw()).repo
 
+    #: Resolved once. mlx_whisper hands `path_or_hf_repo` to the hub on every
+    #: call, and for a repo id that means an API request per transcription —
+    #: visible in the log as a GET to huggingface.co every few seconds all
+    #: through a meeting. Measured on a good connection: 111-346ms per call
+    #: against 116-185ms without it. The median cost is small and the jitter is
+    #: not, and on conference wifi it is the difference between a preview that
+    #: keeps up and one that stalls behind a network timeout.
+    #:
+    #: Pointing at the downloaded snapshot instead removes the request. It
+    #: falls back to the repo id when nothing is cached, which is what a first
+    #: run needs — that is the one time the download is the point.
+    _local: str | None = None
+
+    def _model_path(self) -> str:
+        if self._local is None:
+            self._local = self._resolve_local() or self._repo()
+        return self._local
+
+    def _resolve_local(self) -> str | None:
+        try:
+            from huggingface_hub import snapshot_download
+
+            return snapshot_download(self._repo(), local_files_only=True)
+        except Exception:
+            log.debug("模型还没下到本地，这次走网络", exc_info=True)
+            return None
+
     def transcribe(
         self,
         audio: np.ndarray,
@@ -72,7 +103,7 @@ class MlxWhisperProvider:
         import mlx_whisper
 
         options = {
-            "path_or_hf_repo": self._repo(),
+            "path_or_hf_repo": self._model_path(),
             "temperature": TEMPERATURE,
             "condition_on_previous_text": CONDITION_ON_PREVIOUS,
             "language": language,
@@ -101,7 +132,7 @@ class MlxWhisperProvider:
         import mlx_whisper
 
         options = {
-            "path_or_hf_repo": self._repo(),
+            "path_or_hf_repo": self._model_path(),
             "temperature": TEMPERATURE,
             "condition_on_previous_text": CONDITION_ON_PREVIOUS,
             "language": language,

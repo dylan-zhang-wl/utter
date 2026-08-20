@@ -229,3 +229,61 @@ def test_entries_are_filled_back_against_their_own_index():
     q.flush()
 
     assert got == {41: "一", 42: "二"}
+
+
+# --- script contamination -------------------------------------------------------
+
+
+def test_a_word_the_model_rendered_into_another_script_is_caught():
+    """Seen once in 78 sentences of a real talk: the model turned 「不再」 into
+    Georgian and carried on in Chinese — 「直到我 აღარ需要再去想它」."""
+    from backend.translator import foreign_script
+
+    assert foreign_script("直到我 აღარ需要再去想它。",
+                          "until I no longer have to think about it.") == "აღრ"
+
+
+@pytest.mark.parametrize("translation, source", [
+    ("演员和教练们也都对我很有耐心。", "The cast and coaches were also patient."),
+    ("剧场本身就是一个自成一体的世界。", "The theatre is a world of its own."),
+    # ASCII, digits and CJK punctuation are all ordinary
+    ("50年前，就在离这里不到一英里的地方。", "50 years ago, just under a mile."),
+    # a term the English itself carried is not the model's invention
+    ("这就是所谓的 Sprachgefühl，语感。", "This is what is called Sprachgefühl."),
+    ("用 α 表示显著性水平。", "Significance is denoted α."),
+])
+def test_ordinary_translations_are_left_alone(translation, source):
+    """The author writes about translation; a quotation in another script is
+    normal. Only script the model introduced by itself counts."""
+    from backend.translator import foreign_script
+
+    assert foreign_script(translation, source) == ""
+
+
+def test_a_contaminated_line_is_translated_again():
+    from backend.translator import TranslationQueue
+
+    replies = iter(["1. 直到我 აღარ需要再去想它。", "1. 直到我不再需要去想它。"])
+    got = {}
+    queue = TranslationQueue(lambda text, context=None: next(replies),
+                             lambda i, t: got.__setitem__(i, t),
+                             batch_size=1, max_wait=0.0)
+    queue.submit(0, "until I no longer have to think about it.")
+    queue.drain_once(force=True)
+
+    assert got[0] == "直到我不再需要去想它。"
+
+
+def test_a_retry_that_is_still_wrong_keeps_the_first_answer():
+    """铁律 8's shape: a flawed translation beats none, and the English is safe
+    either way."""
+    from backend.translator import TranslationQueue
+
+    got = {}
+    queue = TranslationQueue(lambda text, context=None: "1. 直到我 აღარ需要再去想它。",
+                             lambda i, t: got.__setitem__(i, t),
+                             batch_size=1, max_wait=0.0)
+    queue.submit(0, "until I no longer have to think about it.")
+    queue.drain_once(force=True)
+
+    assert "需要再去想它" in got[0]

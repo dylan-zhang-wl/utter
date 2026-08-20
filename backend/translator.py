@@ -44,6 +44,32 @@ CONTEXT_ENTRIES = 2
 _NUMBERED = re.compile(r"^\s*(\d+)\s*[.、:：)]\s*(.+)$")
 
 
+def foreign_script(translation: str, source: str) -> str:
+    """Characters in the Chinese that belong to neither language.
+
+    Seen once in 78 sentences of a real talk: 「直到我 აღარ需要再去想它」 — the
+    model rendered 「不再」 into Georgian and carried on in Chinese. It is rare
+    and it is unmissable on screen, so it is worth one retry.
+
+    Deliberately narrow. This user writes about translation, and a legitimate
+    sentence may well carry Greek letters, kana in a quotation, or a term in
+    Cyrillic — so anything already present in the English is allowed through.
+    Only script that the model introduced by itself counts.
+    """
+    allowed = set(source or "")
+    strange = []
+    for ch in translation or "":
+        if ch in allowed or ch.isascii() or ch.isspace():
+            continue
+        if ("\u3000" <= ch <= "\u303f"        # CJK punctuation
+                or "\u4e00" <= ch <= "\u9fff"  # Han
+                or "\uff00" <= ch <= "\uffef"  # fullwidth forms
+                or ch in "《》〈〉—…·"):
+            continue
+        strange.append(ch)
+    return "".join(dict.fromkeys(strange))
+
+
 def format_batch(sources: list[str]) -> str:
     """Number the lines going out, so the reply can be matched back."""
     return "\n".join(f"{i + 1}. {text}" for i, text in enumerate(sources))
@@ -167,6 +193,17 @@ class TranslationQueue:
 
         for position, (index, source) in enumerate(batch):
             translation = matched.get(position)
+            strange = foreign_script(translation or "", source)
+            if strange:
+                log.warning("译文里混进了 %r，重译一次：%s", strange, translation)
+                retried = None
+                try:
+                    retried = self._translate(format_batch([source]), context or None)
+                except Exception:
+                    log.warning("重译也失败了，保留原样", exc_info=True)
+                again = parse_batch(retried, 1).get(0) if retried else None
+                if again and not foreign_script(again, source):
+                    translation = again
             if translation:
                 self._history.append((source, translation))
                 try:

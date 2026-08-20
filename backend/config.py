@@ -168,6 +168,13 @@ class AppConfig(BaseModel):
     #: screen is not blank while somebody talks. Never archived, never
     #: translated; see backend/preview.py for why it has to be a second model
     #: rather than a faster tick of the first one.
+    #: The language being *listened to*, which has nothing to do with the one
+    #: you dictate in. Listen mode read `dictate_language` until 2026-08-20,
+    #: so a user who dictates in Chinese was telling Whisper that an English
+    #: lecture was Chinese. The big model mostly shrugged that off; the small
+    #: preview model did not, and put 「它有色彩的…」 under the English.
+    listen_language: str | None = "en"
+
     listen_preview: bool = True
     listen_preview_tick: float = 1.0
     listen_preview_tier: str = "minimal"

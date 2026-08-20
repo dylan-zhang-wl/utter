@@ -129,3 +129,42 @@ def test_asking_for_an_app_that_is_not_making_sound_says_so():
     with pytest.raises(Exception) as caught:
         src.start()
     assert "没有在放声音" in str(caught.value) or "权限" in str(caught.value)
+
+
+def test_the_aggregate_device_is_waited_for_rather_than_missed(monkeypatch):
+    """Core Audio registers a newly created aggregate asynchronously, so the
+    first look can miss it. Four consecutive 开始听记 failed on 2026-08-20 with
+    「聚合设备建好了，但音频系统看不到它」 and the fifth worked — the device was
+    arriving, just not yet, and each failure cost a click."""
+    from backend.system_audio import SystemAudioError, SystemAudioSource
+
+    source = SystemAudioSource()
+    monkeypatch.setattr(source, "DEVICE_WAIT_SECONDS", 0.0, raising=False)
+    attempts = []
+
+    def find(_sd):
+        attempts.append(1)
+        if len(attempts) < 4:
+            raise SystemAudioError("聚合设备建好了，但音频系统看不到它")
+        return 7
+
+    monkeypatch.setattr(source, "_find_device", find)
+
+    assert source._await_device(None, lambda: None) == 7
+    assert len(attempts) == 4
+
+
+def test_a_device_that_never_appears_still_fails(monkeypatch):
+    """Retrying must not turn a real failure into a hang."""
+    from backend.system_audio import SystemAudioError, SystemAudioSource
+
+    source = SystemAudioSource()
+    monkeypatch.setattr(source, "DEVICE_WAIT_SECONDS", 0.0, raising=False)
+
+    def never(_sd):
+        raise SystemAudioError("聚合设备建好了，但音频系统看不到它")
+
+    monkeypatch.setattr(source, "_find_device", never)
+
+    with pytest.raises(SystemAudioError):
+        source._await_device(None, lambda: None)

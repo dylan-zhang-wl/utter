@@ -160,17 +160,57 @@ def test_omits_initial_prompt_when_empty(monkeypatch, fake_mlx):
 
 
 def test_uses_the_catalog_repo_for_its_tier(monkeypatch, fake_mlx):
+    """Either the repo id or the local snapshot of it — see `_model_path`."""
     on_apple(monkeypatch)
     mlx_provider.MlxWhisperProvider(tier="balanced").transcribe(audio())
 
-    assert fake_mlx[0]["path_or_hf_repo"] == "mlx-community/whisper-large-v3-turbo"
+    assert "whisper-large-v3-turbo" in fake_mlx[0]["path_or_hf_repo"]
 
 
 def test_tier_selects_a_different_repo(monkeypatch, fake_mlx):
     on_apple(monkeypatch)
     mlx_provider.MlxWhisperProvider(tier="minimal").transcribe(audio())
 
-    assert fake_mlx[0]["path_or_hf_repo"] == "mlx-community/whisper-base-mlx-q4"
+    assert "whisper-base-mlx-q4" in fake_mlx[0]["path_or_hf_repo"]
+
+
+def test_a_cached_model_is_named_by_its_local_path(monkeypatch, fake_mlx):
+    """mlx_whisper hands `path_or_hf_repo` to the hub on every call, so a repo
+    id costs an API request per transcription — visible in the log as a GET to
+    huggingface.co every few seconds for a whole meeting. Measured: 111-346ms
+    per call with it, 111-149ms without. The median is small; the jitter is
+    what a preview stalls on, and on conference wifi it is much worse."""
+    on_apple(monkeypatch)
+    monkeypatch.setattr(mlx_provider.MlxWhisperProvider, "_resolve_local",
+                        lambda self: "/somewhere/local/snapshot")
+
+    mlx_provider.MlxWhisperProvider(tier="balanced").transcribe(audio())
+
+    assert fake_mlx[0]["path_or_hf_repo"] == "/somewhere/local/snapshot"
+
+
+def test_it_is_resolved_once_not_per_call(monkeypatch, fake_mlx):
+    on_apple(monkeypatch)
+    looked = []
+    monkeypatch.setattr(mlx_provider.MlxWhisperProvider, "_resolve_local",
+                        lambda self: looked.append(1) or "/local")
+
+    provider = mlx_provider.MlxWhisperProvider(tier="balanced")
+    for _ in range(4):
+        provider.transcribe(audio())
+
+    assert len(looked) == 1, "每次转录都去解析一遍路径"
+
+
+def test_a_model_that_is_not_downloaded_yet_still_names_the_repo(monkeypatch, fake_mlx):
+    """First run: the download is the point, so falling back is correct."""
+    on_apple(monkeypatch)
+    monkeypatch.setattr(mlx_provider.MlxWhisperProvider, "_resolve_local",
+                        lambda self: None)
+
+    mlx_provider.MlxWhisperProvider(tier="balanced").transcribe(audio())
+
+    assert fake_mlx[0]["path_or_hf_repo"] == "mlx-community/whisper-large-v3-turbo"
 
 
 def test_empty_audio_returns_empty_without_calling_the_model(monkeypatch, fake_mlx):
