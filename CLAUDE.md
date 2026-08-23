@@ -112,6 +112,7 @@ Regular 与 Accessory 之间切）——关掉窗口就退回菜单栏，不占 
 
 **这个 .app 不是自包含的**：它引用 `~/.venvs/utter`，拷给别人跑不起来。
 原因与分发路线见 `packaging/build_app.py` 的模块注释。
+**带到另一台 Mac**：`bash packaging/setup_new_mac.sh`，见 [docs/换机安装.md](docs/换机安装.md)。
 
 调试仍然走 CLI（`utter` 装好后任何目录可用，**不要写 `python -m backend.cli`**，
 那个只在仓库目录内有效）：
