@@ -51,6 +51,12 @@ class AppConfig(BaseModel):
     # returning 404 six months after it shipped, which is exactly what happened
     # to gpt-4o-mini in this file. `utter polish --benchmark` fills this in.
     llm_model: str | None = None
+    #: OpenAI-compatible endpoint to talk to instead of api.openai.com —
+    #: DeepSeek, 小米 MiMo, Groq, 硅基流动 all speak the same protocol. The
+    #: provider class always supported this; until 2026-08-23 nothing wired it
+    #: from config, so the setting people needed did not exist. Key still comes
+    #: from the Keychain under openai_api_key regardless of whose key it is.
+    llm_base_url: str | None = None
 
     # Vertex AI, for when there is Google Cloud credit but no API key. Not a
     # secret: a project id is an identifier, and the credential it is used with

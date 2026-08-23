@@ -392,3 +392,65 @@ def test_translate_uses_a_translate_only_provider_directly(fake_deep):
     from backend.providers.free_translate import FreeTranslateProvider
 
     assert llm.translate(FreeTranslateProvider(), "hello") == "翻译结果"
+
+
+# --- a key from someone other than OpenAI ---------------------------------------
+
+
+def test_the_endpoint_can_be_changed_in_config():
+    """The provider class always took a base_url; nothing wired it from
+    config, so pointing Utter at DeepSeek or 小米 MiMo was impossible without
+    editing code. Found when the author tried exactly that."""
+    from backend.cli import _llm_providers
+    from backend.config import AppConfig
+
+    config = AppConfig()
+    config.llm_base_url = "https://token-plan-cn.xiaomimimo.com/v1"
+
+    compat = next(p for p in _llm_providers(config) if p.id == "openai_compat")
+    assert compat.base_url == "https://token-plan-cn.xiaomimimo.com/v1"
+
+
+def test_no_base_url_means_openai_as_before():
+    from backend.cli import _llm_providers
+    from backend.config import AppConfig
+
+    compat = next(p for p in _llm_providers(AppConfig()) if p.id == "openai_compat")
+    assert compat.base_url == "https://api.openai.com/v1"
+
+
+def test_model_and_endpoint_can_be_set_together():
+    from backend.cli import _llm_providers
+    from backend.config import AppConfig
+
+    config = AppConfig()
+    config.llm_base_url = "https://example.com/v1"
+    config.llm_model = "mimo-v2.5"
+
+    compat = next(p for p in _llm_providers(config) if p.id == "openai_compat")
+    assert (compat.base_url, compat.model) == ("https://example.com/v1", "mimo-v2.5")
+
+
+def test_a_foreign_endpoint_falls_back_to_its_own_models(monkeypatch):
+    """None of the gpt-* names exist on 小米's endpoint. Keeping the compiled-in
+    default meant every polish and translation request 404s on a model the
+    endpoint never had — silently, at meeting time."""
+    from backend.providers.openai_compat import OpenAICompatProvider
+
+    provider = OpenAICompatProvider(base_url="https://example.com/v1")
+    monkeypatch.setattr(provider, "available_models", lambda: [
+        "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.5-asr", "mimo-v2.5-tts-voiceclone"])
+
+    model = provider.resolve_model()
+
+    assert model.startswith("mimo"), f"退回了端点上不存在的 {model}"
+    assert "asr" not in model and "voiceclone" not in model, \
+        "把语音模型当成聊天模型了"
+
+
+def test_an_explicit_model_skips_resolution_entirely():
+    from backend.providers.openai_compat import OpenAICompatProvider
+
+    provider = OpenAICompatProvider(base_url="https://example.com/v1",
+                                    model="mimo-v2.5")
+    assert provider.resolve_model() == "mimo-v2.5"

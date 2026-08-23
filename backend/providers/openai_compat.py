@@ -46,7 +46,8 @@ REQUEST_TIMEOUT = 12.0
 #: Anything matching these is not a chat model and must not be benchmarked or
 #: chosen: embeddings, speech, images, moderation.
 _NOT_CHAT = ("embedding", "whisper", "tts", "dall-e", "moderation", "audio", "image",
-             "realtime", "transcribe", "search", "codex", "sora")
+             "realtime", "transcribe", "search", "codex", "sora", "asr",
+             "voiceclone")
 
 
 def _server_message(exc) -> str:
@@ -167,7 +168,18 @@ class OpenAICompatProvider:
                     self.model = candidate
                     break
             else:
-                log.warning("none of the preferred models exist; using %s", self.model)
+                # A foreign endpoint (DeepSeek, 小米 MiMo, …) offers none of
+                # the gpt-* names, and keeping the compiled-in default here
+                # means every request 404s on a model the endpoint never had.
+                # Take the endpoint's own first chat model instead — arbitrary,
+                # but it exists, and setting llm_model in config beats it.
+                chats = self.chat_models()
+                if chats:
+                    self.model = chats[0]
+                    log.warning("端点上没有任何预设模型，用它自己的 %s；"
+                                "建议在 config 里写明 llm_model", self.model)
+                else:
+                    log.warning("none of the preferred models exist; using %s", self.model)
         except LlmError as exc:
             log.warning("could not list models (%s), using %s", exc, self.model)
         self._resolved = True

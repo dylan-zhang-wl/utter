@@ -216,11 +216,16 @@ def _llm_providers(config=None):
             "model": config.llm_model or config.vertex_model,
         },
     }
+    compat = {}
     if config.llm_model:
         # An explicit id wins everywhere, so `utter polish --benchmark` has
         # somewhere to put its answer.
-        kwargs["OpenAICompatProvider"] = {"model": config.llm_model}
+        compat["model"] = config.llm_model
         kwargs["GeminiProvider"] = {"model": config.llm_model}
+    if config.llm_base_url:
+        compat["base_url"] = config.llm_base_url
+    if compat:
+        kwargs["OpenAICompatProvider"] = compat
 
     found = []
     for module_name, class_name in (
